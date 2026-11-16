@@ -1,0 +1,22 @@
+{
+  "$schema": "https://pocketjs.dev/schema/pocket-2.json",
+  "pocket": 2,
+  "id": "dev.lenovo-tab.desk",
+  "name": "desk",
+  "title": "Desk",
+  "version": "0.1.0",
+  "engine": {
+    "capabilities": {
+      "requires": ["text.glyphs.baked", "input.touch"],
+      "enhances": ["input.buttons"]
+    }
+  },
+  "app": {
+    "entry": "apps/desk/main.tsx",
+    "output": "desk-main",
+    "framework": "solid",
+    "viewport": {
+      "fixed": { "logical": [512, 300], "presentation": "integer-fit" }
+    }
+  }
+}

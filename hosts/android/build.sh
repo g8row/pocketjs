@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build + package the PocketJS Android host as a signed APK — no Gradle, no dex.
 #
-#   hosts/android/build.sh [app-manifest]     (default: apps/hero/pocket.json)
+#   hosts/android/build.sh [app-manifest]     (default: apps/desk/pocket.json)
 #
 # Steps: compile the app bundle for the `android` target → cross-compile the
 # host .so (cargo-ndk, arm64-v8a, API 24) → aapt2 link manifest + assets →
@@ -11,7 +11,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
-APP_MANIFEST="${1:-apps/hero/pocket.json}"
+APP_MANIFEST="${1:-apps/desk/pocket.json}"
 
 export ANDROID_HOME="${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}"
 NDK_VER="${NDK_VER:-27.2.12479018}"
@@ -32,10 +32,13 @@ rm -rf "$STAGE" && mkdir -p "$STAGE/assets" "$STAGE/lib/arm64-v8a"
 echo "▸ app bundle ($APP_MANIFEST)"
 (cd "$ROOT" && bun pocket compile --target android --manifest "$APP_MANIFEST" --project-root . >/dev/null)
 APP_NAME="$(cd "$ROOT" && bun -e "console.log(JSON.parse(require('fs').readFileSync('$APP_MANIFEST','utf8')).name ?? '')")"
-JS="$(ls -t "$ROOT"/dist/*.js | head -1)"
+OUTNAME="$(cd "$ROOT" && bun -e "console.log(JSON.parse(require('fs').readFileSync('$APP_MANIFEST','utf8')).app.output)")"
+JS="$ROOT/dist/$OUTNAME.js"
 PAK="${JS%.js}.pak"
 cp "$JS" "$STAGE/assets/app.js"
 cp "$PAK" "$STAGE/assets/app.pak"
+# Logical viewport the app was built for (host reads assets/viewport).
+(cd "$ROOT" && bun -e "const m=JSON.parse(require('fs').readFileSync('$APP_MANIFEST','utf8'));const v=m.app?.viewport?.fixed?.logical??[480,272];console.log(v[0]+' '+v[1])") > "$STAGE/assets/viewport"
 echo "  $(basename "$JS") + $(basename "$PAK") ${APP_NAME:+($APP_NAME)}"
 
 echo "▸ host .so"

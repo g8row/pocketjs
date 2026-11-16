@@ -254,7 +254,7 @@ export const POCKET_TARGETS = defineTargetRegistry<PocketCapabilityId, {
     form: "takeover",
     display: {
       physicalViewport: [960, 544],
-      logicalViewports: [[480, 272]],
+      logicalViewports: [[480, 272], [512, 300]],
       presentations: ["integer-fit"],
       rasterDensity: 2,
     },
