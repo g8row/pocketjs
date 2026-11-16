@@ -1,108 +1,134 @@
-// The five Desk panes. Visual language from g8row.xyz: near-black ground,
-// #141414 containers with 1px #222 rules, mono uppercase eyebrows, one accent
-// (#a8c7fa), and always-on motion that proves the frame rate.
+// The five Desk panes, built from g8row.xyz's components: the hero (lowercase
+// display type over the ASCII ridge field, a stats row of ruled cells), small
+// project cards, the centuryplay player (device rows + the wave), spec tables
+// and the frame-time graph. Every pane keeps something moving — and pauses
+// all of it while it's off screen.
 
 import { For, Show, createMemo, createSignal } from "solid-js";
 import { Image, Text, View, type NodeMirror } from "@pocketjs/framework/components";
 import { onFrame } from "@pocketjs/framework/lifecycle";
-import { createJumpBatch, jump } from "@pocketjs/framework/animation";
-import { act, blobSrc, desk } from "./link.ts";
+import { createJumpBatch } from "@pocketjs/framework/animation";
+import { act, blobSrc, desk, linkConnected } from "./link.ts";
 import { Ridges } from "./ridges.tsx";
 import { T } from "./theme.ts";
 
+type Active = () => boolean;
 const pad2 = (n: number) => (n < 10 ? `0${n}` : `${n}`);
 const clip = (s: unknown, n: number): string => {
   const str = typeof s === "string" ? s : "";
   return str.length > n ? `${str.slice(0, n - 1)}…` : str;
 };
 const mmss = (s: number) => `${Math.floor(s / 60)}:${pad2(Math.floor(s % 60))}`;
+const lower = (s: unknown) => (typeof s === "string" ? s.toLowerCase() : "");
 
-/** Frames per second as the guest actually sees them (1 s window). */
-export function createFps() {
+/** Frames per second the guest actually gets (1 s window) + last frame gaps. */
+export function createFrameStats() {
   const [fps, setFps] = createSignal(60);
+  const gaps: number[] = new Array(40).fill(16.7);
   let n = 0;
   let t0 = Date.now();
+  let last = Date.now();
   onFrame(() => {
-    n++;
     const now = Date.now();
+    gaps.push(now - last);
+    gaps.shift();
+    last = now;
+    n++;
     if (now - t0 >= 1000) {
       setFps(Math.round((n * 1000) / (now - t0)));
       n = 0;
       t0 = now;
     }
   });
-  return fps;
+  return { fps, gaps };
 }
 
-/** A Material-3-expressive "cookie": stacked rounded squares, spinning forever. */
-export function Cookie(props: { size: number; speed?: number; active?: () => boolean }) {
+/** The site's Material-3 "cookie" mark: two rounded squares at 45°, spinning. */
+export function Cookie(props: { size: number; speed?: number; active?: Active; dim?: boolean }) {
   const nodes: NodeMirror[] = [];
   let angle = 0;
-  const speed = props.speed ?? 0.6;
   let batch: ReturnType<typeof createJumpBatch> | undefined;
   onFrame(() => {
     if (props.active && !props.active()) return;
-    if (!batch && nodes.length === 3) batch = createJumpBatch(nodes.map((n) => [n, "rotate"] as const));
+    if (!batch && nodes.length === 2) batch = createJumpBatch(nodes.map((n) => [n, "rotate"] as const));
     if (!batch) return;
-    angle = (angle + speed) % 360;
+    angle = (angle + (props.speed ?? 0.5)) % 360;
     batch.set(0, angle);
-    batch.set(1, angle + 30);
-    batch.set(2, -angle * 1.5 + 60);
+    batch.set(1, angle + 45);
     batch.commit();
   });
+  const s = () => props.size * 0.74;
+  const cls = () => (props.dim ? "absolute bg-[#363636]" : "absolute bg-[#a8c7fa]");
   return (
     <View class="relative items-center justify-center" style={{ width: props.size, height: props.size }}>
-      <View ref={(n: NodeMirror) => nodes.push(n)} class="absolute rounded-[16] bg-[#1d1d1d] border border-[#363636]" style={{ width: props.size * 0.72, height: props.size * 0.72 }} />
-      <View ref={(n: NodeMirror) => nodes.push(n)} class="absolute rounded-[16] bg-[#141414] border border-[#363636]" style={{ width: props.size * 0.72, height: props.size * 0.72 }} />
-      <View ref={(n: NodeMirror) => nodes.push(n)} class="absolute rounded-[10] bg-[#a8c7fa]" style={{ width: props.size * 0.22, height: props.size * 0.22 }} />
+      <View ref={(n: NodeMirror) => nodes.push(n)} class={cls()} style={{ width: s(), height: s(), radius: props.size * 0.24 }} />
+      <View ref={(n: NodeMirror) => nodes.push(n)} class={cls()} style={{ width: s(), height: s(), radius: props.size * 0.24 }} />
     </View>
   );
 }
 
-// ---- 1. home ------------------------------------------------------------------
+/** One stats cell: tiny lowercase mono label over a sans value. */
+function Cell(props: { label: string; value: string; accent?: boolean }) {
+  return (
+    <View class="flex-1 flex-col justify-center gap-1 px-3" style={{ basis: 0 }}>
+      <Text class={T.monoSm}>{props.label}</Text>
+      <Text class={props.accent ? "text-base text-[#a8c7fa]" : "text-base text-[#ededed]"}>{props.value}</Text>
+    </View>
+  );
+}
 
-export function HomePage(props: { active: () => boolean }) {
+// ---- 1. home: the hero ----------------------------------------------------------------
+
+const DAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+export function HomePage(props: { active: Active; fps: () => number }) {
   const clock = () => desk.clock ?? {};
   const m = () => desk.music ?? {};
+  const tab = () => desk.tablet ?? {};
   const sessions = () => desk.claude?.sessions ?? [];
   const waiting = () => sessions().filter((s: any) => s.state === "waiting").length;
+  const day = () => {
+    const d = lower(clock().date).split(" ");
+    const full = DAYS.find((x) => x.startsWith(d[0] ?? "~")) ?? d[0] ?? "";
+    return { day: full, date: d.slice(1).join(" ") };
+  };
   return (
-    <View class="h-full flex-row" style={{ width: 512 }}>
-      <View class="flex-col justify-between p-4" style={{ width: 210 }}>
-        <View class="flex-col gap-1">
-          <Text class={T.eyebrow}>{clip(clock().date, 22).toUpperCase()}</Text>
-          <Text class={T.hero}>{clock().h !== undefined ? `${pad2(clock().h)}:${pad2(clock().m)}` : "--:--"}</Text>
+    <View class="h-full flex-col" style={{ width: 512 }}>
+      <View class="flex-1 flex-col relative">
+        {/* the ridge field sits behind the type, right-aligned like the site */}
+        <View class="absolute flex-row justify-end" style={{ insetT: 4, insetR: 6, insetL: 160, insetB: 0 }}>
+          <Ridges cols={42} rows={20} ridges={9} every={3} active={props.active} />
         </View>
-        <View class="flex-col gap-2">
-          <View class="flex-row items-center gap-2">
-            <View class={m().state === "playing" ? "w-2 h-2 rounded-full bg-[#a8c7fa]" : "w-2 h-2 rounded-full bg-[#363636]"} />
-            <Text class={T.body}>{m().title ? clip(`${m().title} — ${m().artist ?? ""}`, 26) : "nothing playing"}</Text>
-          </View>
-          <View class="flex-row items-center gap-2">
-            <View class={waiting() > 0 ? "w-2 h-2 rounded-full bg-[#fbbf24]" : "w-2 h-2 rounded-full bg-[#363636]"} />
-            <Text class={T.body}>
-              {waiting() > 0 ? `claude needs you (${waiting()})` : `${sessions().length} claude sessions`}
-            </Text>
-          </View>
+        <View class="flex-row justify-between px-4 pt-3">
+          <Text class={T.monoSm}>desk companion at your mac</Text>
+          <Text class={T.monoSm}>{`android · pocketjs · ${props.fps()}fps`}</Text>
+        </View>
+        <View class="flex-col px-4 pt-3">
+          <Text class={T.displayAccent}>{clock().h !== undefined ? `${pad2(clock().h)}:${pad2(clock().m)}` : "--:--"}</Text>
+          <Text class={T.display}>{day().day || "today"}</Text>
+          <Text class={T.display}>{day().date}</Text>
+        </View>
+        <View class="flex-row px-4 pt-3">
+          <Text class={T.body}>{waiting() > 0 ? "claude is waiting for you." : "everything at your desk, one tap away."}</Text>
         </View>
       </View>
-      <View class="flex-1 h-full items-center justify-center overflow-hidden">
-        <Ridges cols={38} rows={20} ridges={9} every={3} active={props.active} />
+      <View class={T.rule} />
+      <View class="h-[54] flex-row">
+        <Cell label="now" value={m().title ? clip(lower(m().title), 16) : "silence"} accent={m().state === "playing"} />
+        <View class={T.vrule} />
+        <Cell label="claude" value={waiting() > 0 ? `${waiting()} waiting` : `${sessions().length} ${sessions().length === 1 ? "session" : "sessions"}`} accent={waiting() > 0} />
+        <View class={T.vrule} />
+        <Cell label="mac" value={desk.sys?.cpu !== undefined ? `${desk.sys.cpu}% cpu` : "–"} />
+        <View class={T.vrule} />
+        <Cell label="tablet" value={tab().battery !== undefined ? `${tab().battery}%${tab().charging ? " ↑" : ""}` : linkConnected() ? "linked" : "offline"} />
       </View>
     </View>
   );
 }
 
-// ---- 2. deck ------------------------------------------------------------------
+// ---- 2. deck: small project cards --------------------------------------------------------
 
-const TILE_ACCENT: Record<string, string> = {
-  rose: "w-2 h-2 rounded-full bg-[#fb7185]",
-  blue: "w-2 h-2 rounded-full bg-[#a8c7fa]",
-  amber: "w-2 h-2 rounded-full bg-[#fbbf24]",
-  emerald: "w-2 h-2 rounded-full bg-[#6ee7b7]",
-  violet: "w-2 h-2 rounded-full bg-[#c4b5fd]",
-  zinc: "w-2 h-2 rounded-full bg-[#8a8a8a]",
-};
+const KIND: Record<string, string> = { mic: "audio", vol: "audio", open: "app", screenshot: "capture", music: "media" };
 
 export function DeckPage() {
   const tiles = createMemo<any[]>(() => (desk.deck?.tiles ?? []).slice(0, 6));
@@ -115,18 +141,20 @@ export function DeckPage() {
             <For each={row(r)}>
               {(t) => (
                 <View
-                  class="flex-1 h-full flex-col justify-between rounded-[18] bg-[#141414] border border-[#222222] p-3 active:bg-[#1d1d1d] active:border-[#a8c7fa] focus:border-[#363636]"
+                  class="flex-1 h-full flex-col justify-between rounded-[18] bg-gradient-to-b from-[#161616] to-[#101010] border border-[#222222] p-3 active:border-[#a8c7fa]"
                   style={{ basis: 0 }}
                   focusable
                   onPress={() => act(t.id)}
                 >
                   <View class="flex-row items-center justify-between">
-                    <View class={TILE_ACCENT[t.color] ?? TILE_ACCENT.zinc} />
-                    <Text class={T.monoSm}>{clip(t.id.split(".")[0], 10).toUpperCase()}</Text>
+                    <Text class="text-base text-[#ededed]">{lower(clip(t.label, 12))}</Text>
+                    <Text class={T.monoSm}>↗</Text>
                   </View>
-                  <View class="flex-col">
-                    <Text class={T.title}>{clip(t.label, 12)}</Text>
-                    <Text class={T.monoSm}>{clip(t.sub ?? "", 14)}</Text>
+                  <Text class={T.monoSm}>{lower(clip(t.sub ?? KIND[t.id.split(".")[0]] ?? "action", 18))}</Text>
+                  <View class="flex-row">
+                    <View class={t.sub === "MUTED" ? T.chipA : T.chipO}>
+                      <Text class={t.sub === "MUTED" ? "text-xs font-bold text-[#a8c7fa]" : T.monoSm}>{lower(t.id)}</Text>
+                    </View>
                   </View>
                 </View>
               )}
@@ -138,66 +166,74 @@ export function DeckPage() {
   );
 }
 
-// ---- 3. music -----------------------------------------------------------------
+// ---- 3. music: the centuryplay card + wave ----------------------------------------------
 
-export function MusicPage(props: { active: () => boolean }) {
+const WAVE_N = 46;
+
+export function MusicPage(props: { active: Active }) {
   const m = () => desk.music ?? {};
   const playing = () => m().state === "playing";
   const art = () => blobSrc("music.art");
-  // Locally interpolated position so the bar glides between 1 s updates.
   let basePos = 0;
   let baseAt = 0;
   const [pos, setPos] = createSignal(0);
-  const bars: NodeMirror[] = [];
+  const dots: NodeMirror[] = [];
   let batch: ReturnType<typeof createJumpBatch> | undefined;
-  let f = 0;
+  let phase = 0;
+  let amp = 0;
   onFrame(() => {
     if (!props.active()) return;
-    f++;
     const p = m().position ?? 0;
     if (p !== basePos) {
       basePos = p;
       baseAt = Date.now();
     }
-    const live = playing() ? basePos + (Date.now() - baseAt) / 1000 : basePos;
-    setPos(live);
-    if (!batch && bars.length === 24) batch = createJumpBatch(bars.map((b) => [b, "scaleY"] as const));
+    setPos(playing() ? basePos + (Date.now() - baseAt) / 1000 : basePos);
+    // the centuryplay wave: a travelling sine that flattens when paused
+    amp += ((playing() ? 4 : 0.4) - amp) * 0.08;
+    phase += 0.09;
+    if (!batch && dots.length === WAVE_N) batch = createJumpBatch(dots.map((d) => [d, "translateY"] as const));
     if (batch) {
-      for (let i = 0; i < 24; i++) {
-        const v = playing()
-          ? 0.25 + 0.75 * Math.abs(Math.sin(f * 0.07 + i * 0.6) * Math.sin(f * 0.031 + i * 1.3))
-          : 0.08;
-        batch.set(i, v);
-      }
+      for (let i = 0; i < WAVE_N; i++) batch.set(i, Math.sin(i * 0.55 - phase) * amp);
       batch.commit();
     }
   });
   const progress = () => (m().duration > 0 ? Math.min(1, pos() / m().duration) : 0);
+  const playedDots = () => Math.round(progress() * WAVE_N);
   return (
-    <View class="h-full flex-row gap-4 p-4 items-center" style={{ width: 512 }}>
-      <View class="relative items-center justify-center" style={{ width: 168, height: 168 }}>
-        <Show when={art() !== ""} fallback={<Cookie size={150} speed={playing() ? 1.2 : 0.2} active={props.active} />}>
-          <Image class="w-[160] h-[160] rounded-[18]" src={art()} />
+    <View class="h-full flex-row gap-3 p-3" style={{ width: 512 }}>
+      <View class="relative items-center justify-center" style={{ width: 196 }}>
+        <Show when={art() !== ""} fallback={<Cookie size={120} speed={playing() ? 1.2 : 0.25} active={props.active} />}>
+          <Image class="w-[188] h-[188] rounded-[18]" src={art()} />
         </Show>
       </View>
-      <View class="flex-1 h-full flex-col justify-between">
-        <View class="flex-col gap-1">
-          <Text class={T.eyebrowAccent}>{playing() ? "NOW PLAYING" : m().state === "paused" ? "PAUSED" : "MUSIC"}</Text>
-          <Text class="text-2xl text-[#ffffff]">{clip(m().title || "Nothing playing", 20)}</Text>
-          <Text class={T.body}>{clip(m().artist, 28)}</Text>
-          <Text class={T.monoSm}>{clip(m().album, 30)}</Text>
+      <View class="rounded-[18] bg-gradient-to-b from-[#161616] to-[#101010] border border-[#222222] overflow-hidden flex-1 flex-col justify-between p-3">
+        <View class="flex-row items-center justify-between">
+          <View class="flex-row items-center gap-2">
+            <Cookie size={18} speed={playing() ? 2 : 0.2} active={props.active} />
+            <Text class="text-lg text-[#ededed]">{playing() ? "now playing" : m().state === "paused" ? "paused" : "music"}</Text>
+          </View>
+          <Text class={T.monoSm}>on mac</Text>
         </View>
-        <View class="flex-row items-end gap-1 h-[40]">
-          <For each={Array.from({ length: 24 })}>
-            {() => (
-              <View ref={(n: NodeMirror) => bars.push(n)} class="w-[6] h-[40] rounded-[2] bg-[#a8c7fa]" style={{ originY: 0.5 }} />
-            )}
-          </For>
-        </View>
-        <View class="flex-col gap-1">
-          <View class="h-[3] w-full rounded-[2] bg-[#222222]">
-            {/* scaleX (paint-only) instead of width: no relayout per frame */}
-            <View class="h-[3] w-full rounded-[2] bg-[#a8c7fa]" style={{ originX: -0.5, scaleX: Math.max(0.001, progress()) }} />
+        <View class="rounded-[14] bg-[#1d1d1d] border border-[#a8c7fa] flex-col gap-1 p-3">
+          <View class="flex-row items-center gap-2">
+            <View class="w-[26] h-[26] rounded-[8] bg-[#141414] items-center justify-center">
+              <Cookie size={14} speed={playing() ? 2.5 : 0} active={props.active} />
+            </View>
+            <View class="flex-1 flex-col">
+              <Text class="text-base text-[#ededed]">{lower(clip(m().title || "nothing playing", 26))}</Text>
+              <Text class={T.monoSm}>{lower(clip([m().artist, m().album].filter(Boolean).join(" · "), 34))}</Text>
+            </View>
+          </View>
+          <View class="flex-row items-center h-[18] gap-[1]">
+            <For each={Array.from({ length: WAVE_N }, (_, i) => i)}>
+              {(i) => (
+                <View
+                  ref={(n: NodeMirror) => dots.push(n)}
+                  class={i < playedDots() ? "w-[4] h-[2] rounded-[1] bg-[#a8c7fa]" : "w-[4] h-[2] rounded-[1] bg-[#363636]"}
+                />
+              )}
+            </For>
           </View>
           <View class="flex-row justify-between">
             <Text class={T.monoSm}>{mmss(pos())}</Text>
@@ -205,14 +241,14 @@ export function MusicPage(props: { active: () => boolean }) {
           </View>
         </View>
         <View class="flex-row gap-2">
-          <View class="flex-1 h-[40] rounded-[999] border border-[#363636] items-center justify-center active:bg-[#1d1d1d]" style={{ basis: 0 }} focusable onPress={() => act("music.prev")}>
-            <Text class="text-sm text-[#ededed]">◀◀</Text>
+          <View class="flex-1 h-[34] rounded-[999] border border-[#363636] items-center justify-center active:bg-[#1d1d1d]" style={{ basis: 0 }} focusable onPress={() => act("music.prev")}>
+            <Text class="text-sm text-[#ededed]">prev</Text>
           </View>
-          <View class="flex-1 h-[40] rounded-[999] bg-[#a8c7fa] items-center justify-center active:bg-[#7fa7e8]" style={{ basis: 0 }} focusable onPress={() => act("music.toggle")}>
-            <Text class="text-sm text-[#0b1d33]">{playing() ? "| |" : "▶"}</Text>
+          <View class="flex-1 h-[34] rounded-[999] bg-[#a8c7fa] items-center justify-center active:bg-[#7fa7e8]" style={{ basis: 0 }} focusable onPress={() => act("music.toggle")}>
+            <Text class="text-sm text-[#0b1d33]">{playing() ? "pause" : "play"}</Text>
           </View>
-          <View class="flex-1 h-[40] rounded-[999] border border-[#363636] items-center justify-center active:bg-[#1d1d1d]" style={{ basis: 0 }} focusable onPress={() => act("music.next")}>
-            <Text class="text-sm text-[#ededed]">▶▶</Text>
+          <View class="flex-1 h-[34] rounded-[999] border border-[#363636] items-center justify-center active:bg-[#1d1d1d]" style={{ basis: 0 }} focusable onPress={() => act("music.next")}>
+            <Text class="text-sm text-[#ededed]">next</Text>
           </View>
         </View>
       </View>
@@ -220,133 +256,138 @@ export function MusicPage(props: { active: () => boolean }) {
   );
 }
 
-// ---- 4. claude ----------------------------------------------------------------
+// ---- 4. claude: device-style rows ----------------------------------------------------------
 
-const PILL: Record<string, string> = {
-  working: "px-2 rounded-[999] bg-[#a8c7fa1f]",
-  waiting: "px-2 rounded-[999] bg-[#fbbf2433]",
-  done: "px-2 rounded-[999] bg-[#6ee7b71f]",
-  idle: "px-2 rounded-[999] bg-[#1d1d1d]",
+const ROW: Record<string, string> = {
+  waiting: "flex-row items-center gap-3 rounded-[14] bg-[#1d1d1d] border border-[#a8c7fa] px-3 py-2",
+  working: "flex-row items-center gap-3 rounded-[14] bg-[#1d1d1d] border border-[#222222] px-3 py-2",
+  done: "flex-row items-center gap-3 rounded-[14] bg-[#141414] border border-[#222222] px-3 py-2",
+  idle: "flex-row items-center gap-3 rounded-[14] bg-[#141414] border border-[#222222] px-3 py-2",
 };
-const PILL_TEXT: Record<string, string> = {
-  working: "text-xs font-bold text-[#a8c7fa]",
-  waiting: "text-xs font-bold text-[#fbbf24]",
-  done: "text-xs font-bold text-[#6ee7b7]",
-  idle: "text-xs font-bold text-[#8a8a8a]",
-};
-const LABEL: Record<string, string> = { working: "WORKING", waiting: "NEEDS YOU", done: "DONE", idle: "IDLE" };
+const STATE: Record<string, string> = { waiting: "needs you", working: "working", done: "done", idle: "idle" };
 
-export function ClaudePage(props: { active: () => boolean }) {
+export function ClaudePage(props: { active: Active }) {
   const sessions = createMemo<any[]>(() => (desk.claude?.sessions ?? []).slice(0, 4));
-  const dots: NodeMirror[] = [];
-  let f = 0;
-  onFrame(() => {
-    if (!props.active()) return;
-    f++;
-    const a = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(f * 0.12));
-    for (const d of dots) jump(d, "opacity", a);
-  });
   return (
-    <View class="h-full flex-col gap-2 p-3" style={{ width: 512 }}>
-      <View class="flex-row items-center justify-between px-1">
-        <Text class={T.eyebrow}>CLAUDE CODE</Text>
-        <Text class={T.monoSm}>
-          {desk.claude?.hooks === false ? "hooks not installed" : `${desk.claude?.sessions?.length ?? 0} sessions`}
-        </Text>
-      </View>
-      <For
-        each={sessions()}
-        fallback={
-          <View class="flex-1 items-center justify-center gap-3">
-            <Cookie size={64} speed={0.4} active={props.active} />
-            <Text class={T.body}>no active sessions</Text>
+    <View class="h-full flex-col p-3" style={{ width: 512 }}>
+      <View class="rounded-[18] bg-gradient-to-b from-[#161616] to-[#101010] border border-[#222222] overflow-hidden flex-1 flex-col gap-2 p-3">
+        <View class="flex-row items-center justify-between">
+          <View class="flex-row items-center gap-2">
+            <Cookie size={18} speed={0.8} active={props.active} />
+            <Text class="text-lg text-[#ededed]">claude code</Text>
           </View>
-        }
-      >
-        {(s) => (
-          <View class="flex-row items-center gap-3 rounded-[18] bg-[#141414] border border-[#222222] px-3 py-2">
-            <Show
-              when={s.state === "working"}
-              fallback={<View class={s.state === "waiting" ? "w-2 h-2 rounded-full bg-[#fbbf24]" : "w-2 h-2 rounded-full bg-[#363636]"} />}
-            >
-              <View ref={(n: NodeMirror) => dots.push(n)} class="w-2 h-2 rounded-full bg-[#a8c7fa]" />
-            </Show>
-            <View class="flex-1 flex-col">
-              <Text class="text-base text-[#ededed]">{clip(s.name, 28)}</Text>
-              <Text class={T.monoSm}>{clip(s.detail, 52)}</Text>
+          <Text class={T.monoSm}>
+            {desk.claude?.hooks === false ? "hooks not installed" : `${desk.claude?.sessions?.length ?? 0} ${(desk.claude?.sessions?.length ?? 0) === 1 ? "session" : "sessions"} on mac`}
+          </Text>
+        </View>
+        <For
+          each={sessions()}
+          fallback={
+            <View class="flex-1 items-center justify-center gap-3">
+              <Cookie size={56} speed={0.4} dim active={props.active} />
+              <Text class={T.monoSm}>no active sessions</Text>
             </View>
-            <View class="flex-col items-end gap-1">
-              <View class={PILL[s.state] ?? PILL.idle}>
-                <Text class={PILL_TEXT[s.state] ?? PILL_TEXT.idle}>{LABEL[s.state] ?? s.state}</Text>
+          }
+        >
+          {(s) => (
+            <View class={ROW[s.state] ?? ROW.idle}>
+              <View class="w-[26] h-[26] rounded-[8] bg-[#141414] items-center justify-center">
+                <Show
+                  when={s.state === "working"}
+                  fallback={<Text class={s.state === "waiting" ? "text-sm text-[#a8c7fa]" : "text-sm text-[#8a8a8a]"}>{s.state === "done" ? "✓" : "●"}</Text>}
+                >
+                  <Cookie size={14} speed={3} active={props.active} />
+                </Show>
               </View>
-              <Text class={T.monoSm}>{s.ago ?? ""}</Text>
+              <View class="flex-1 flex-col">
+                <Text class="text-base text-[#ededed]">{lower(clip(s.name, 30))}</Text>
+                <Text class={T.monoSm}>{lower(clip(s.detail, 40))}</Text>
+              </View>
+              <View class="w-[78] flex-col items-end gap-1">
+                <View class={s.state === "waiting" ? T.chipA : T.chipO}>
+                  <Text class={s.state === "waiting" ? "text-xs font-bold text-[#a8c7fa]" : T.monoSm}>{STATE[s.state] ?? s.state}</Text>
+                </View>
+                <Text class={T.monoSm}>{s.ago ?? ""}</Text>
+              </View>
             </View>
-          </View>
-        )}
-      </For>
-    </View>
-  );
-}
-
-// ---- 5. system ----------------------------------------------------------------
-
-function Gauge(props: { label: string; value: () => number | undefined; unit?: string; active: () => boolean }) {
-  let arc: NodeMirror | undefined;
-  let shown = 0;
-  onFrame(() => {
-    if (!props.active()) return;
-    const v = props.value() ?? 0;
-    shown += (v - shown) * 0.12; // ease toward the live value every frame
-    if (arc) jump(arc, "arcSweep", Math.max(0.5, shown * 2.7));
-  });
-  return (
-    <View class="flex-1 h-full rounded-[18] bg-[#141414] border border-[#222222] items-center justify-center" style={{ basis: 0 }}>
-      <View class="relative items-center justify-center" style={{ width: 112, height: 112 }}>
-        <View class="absolute w-[112] h-[112] arc-start-[225] arc-sweep-[270] arc-width-[6] bg-[#222222]" />
-        <View ref={(n: NodeMirror) => (arc = n)} class="absolute w-[112] h-[112] arc-start-[225] arc-sweep-[1] arc-width-[6] bg-[#a8c7fa]" />
-        <View class="flex-col items-center">
-          <Text class="text-2xl font-bold text-[#ededed]">{props.value() !== undefined ? `${props.value()}` : "–"}</Text>
-          <Text class={T.eyebrow}>{props.label}</Text>
-        </View>
+          )}
+        </For>
       </View>
     </View>
   );
 }
 
-export function SystemPage(props: { fps: () => number; active: () => boolean }) {
-  const history: number[] = [];
-  const [hist, setHist] = createSignal<number[]>([]);
-  let lastCpu: number | undefined;
-  onFrame(() => {
-    const c = desk.sys?.cpu;
-    if (c !== undefined && c !== lastCpu) {
-      lastCpu = c;
-      history.push(c);
-      if (history.length > 28) history.shift();
-      setHist([...history]);
-    }
-  });
+// ---- 5. system: frame-time graph + spec table --------------------------------------------
+
+const BARS = 40;
+
+function SpecRow(props: { k: string; v: string }) {
   return (
-    <View class="h-full flex-row gap-2 p-3" style={{ width: 512 }}>
-      <Gauge label="MAC CPU %" value={() => desk.sys?.cpu} active={props.active} />
-      <Gauge label="MAC RAM %" value={() => desk.sys?.mem} active={props.active} />
-      <View class="flex-1 h-full flex-col justify-between rounded-[18] bg-[#141414] border border-[#222222] p-3" style={{ basis: 0 }}>
-        <View class="flex-col">
-          <Text class={T.eyebrow}>TABLET UI</Text>
-          <View class="flex-row items-end gap-1">
-            <Text class="text-4xl font-bold text-[#ededed]">{props.fps()}</Text>
-            <Text class={T.monoSm}>fps</Text>
-          </View>
+    <View class="flex-col">
+      <View class="flex-row justify-between py-[5]">
+        <Text class={T.monoSm}>{props.k}</Text>
+        <Text class="text-sm text-[#b3b3b3]">{props.v}</Text>
+      </View>
+      <View class={T.rule} />
+    </View>
+  );
+}
+
+export function SystemPage(props: { active: Active; fps: () => number; gaps: number[] }) {
+  const bars: NodeMirror[] = [];
+  let batch: ReturnType<typeof createJumpBatch> | undefined;
+  onFrame(() => {
+    if (!props.active()) return;
+    if (!batch && bars.length === BARS) batch = createJumpBatch(bars.map((b) => [b, "scaleY"] as const));
+    if (!batch) return;
+    // bar height ∝ frame time; the dashed line marks the 16.7 ms budget (60 Hz)
+    for (let i = 0; i < BARS; i++) batch.set(i, Math.max(0.04, Math.min(1, (props.gaps[i] ?? 16.7) / 33.4)));
+    batch.commit();
+  });
+  const tab = () => desk.tablet ?? {};
+  return (
+    <View class="h-full flex-row gap-3 p-3" style={{ width: 512 }}>
+      <View class="rounded-[18] bg-gradient-to-b from-[#161616] to-[#101010] border border-[#222222] overflow-hidden flex-1 flex-col justify-between p-3">
+        <View class="flex-row justify-between">
+          <Text class={T.monoSm}>desk · 60 hz</Text>
+          <Text class={T.monoSm}>pocketjs · software</Text>
         </View>
-        <View class="flex-col gap-1">
-          <Text class={T.eyebrow}>CPU HISTORY</Text>
-          <View class="flex-row items-end gap-[1] h-[48]">
-            <For each={hist()}>
-              {(v) => <View class="w-[4] rounded-[1] bg-[#a8c7fa]" style={{ height: Math.max(2, Math.round((v / 100) * 48)) }} />}
+        <View class="flex-1 flex-col justify-end">
+          <View class="relative w-full h-[148] flex-row items-end justify-between">
+            <For each={Array.from({ length: BARS })}>
+              {() => <View ref={(n: NodeMirror) => bars.push(n)} class="w-[3] h-[148] rounded-[1] bg-[#5a5a5a]" style={{ originY: 0.5 }} />}
             </For>
+            {/* budget line at 16.7 ms = half the 33.4 ms scale */}
+            <View class="absolute flex-row justify-between" style={{ insetL: 0, insetR: 0, insetB: 74 }}>
+              <For each={Array.from({ length: 34 })}>{() => <View class="w-[3] h-[1] bg-[#a8c7fa]" />}</For>
+            </View>
+            <View class="absolute" style={{ insetL: 0, insetB: 78 }}>
+              <Text class="text-xs font-bold text-[#a8c7fa]">16.7 ms</Text>
+            </View>
           </View>
         </View>
-        <Cookie size={36} speed={1} active={props.active} />
+        <View class="flex-row justify-between pt-2">
+          <Text class={T.monoSm}>frame time</Text>
+          <Text class="text-xs font-bold text-[#a8c7fa]">{`${props.fps()} fps`}</Text>
+        </View>
+      </View>
+      <View class="flex-col justify-between" style={{ width: 196 }}>
+        <View class="flex-row items-center gap-3 pb-1 pl-1">
+          <Cookie size={20} speed={0.6} active={props.active} />
+          <View class="flex-col">
+            <Text class="text-lg text-[#ededed]">tb-7304x</Text>
+            <Text class={T.monoSm}>{`${tab().mode ?? "android"} · rooted · stripped`}</Text>
+          </View>
+        </View>
+        <View class="flex-col">
+          <View class={T.rule} />
+          <SpecRow k="soc" v="mt6737m · 4×a53" />
+          <SpecRow k="cpu" v={tab().cpuMhz ? `${tab().cpuMhz} mhz` : "–"} />
+          <SpecRow k="ram free" v={tab().memFreeMb ? `${tab().memFreeMb} / ${tab().memTotalMb} mb` : "–"} />
+          <SpecRow k="battery" v={tab().battery !== undefined ? `${tab().battery}%${tab().charging ? " · charging" : ""}` : "–"} />
+          <SpecRow k="uptime" v={tab().uptime ?? "–"} />
+          <SpecRow k="mac" v={desk.sys ? `${desk.sys.cpu}% cpu · ${desk.sys.mem}% ram` : "–"} />
+        </View>
       </View>
     </View>
   );

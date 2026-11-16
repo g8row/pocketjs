@@ -1,12 +1,12 @@
 // Desk — the TB-7304X desk companion (activity host and kiosk mode).
-// Five swipeable panes fed by deskd over the USB link; styled after g8row.xyz.
-// 512×300 logical = the 1024×600 panel at 2x.
+// Five swipeable panes fed by deskd over the USB link, built from g8row.xyz's
+// components. 512×300 logical = the 1024×600 panel at 2x.
 
 import { For } from "solid-js";
 import { Text, View } from "@pocketjs/framework/components";
-import { linkConnected, desk, useLink } from "./link.ts";
+import { useLink } from "./link.ts";
 import { createPager } from "./pager.tsx";
-import { ClaudePage, DeckPage, HomePage, MusicPage, SystemPage, createFps } from "./pages.tsx";
+import { ClaudePage, DeckPage, HomePage, MusicPage, SystemPage, createFrameStats } from "./pages.tsx";
 import { CHARSET } from "./charset.ts";
 import { T, W } from "./theme.ts";
 
@@ -14,49 +14,44 @@ import { T, W } from "./theme.ts";
 // bakes every codepoint it sees in source literals.
 void CHARSET;
 
-const PAGES = ["HOME", "DECK", "MUSIC", "CLAUDE", "SYSTEM"] as const;
-const pad2 = (n: number) => (n < 10 ? `0${n}` : `${n}`);
+const PAGES = ["home", "deck", "music", "claude", "system"] as const;
 
 export default function Desk() {
   useLink();
-  const fps = createFps();
+  const { fps, gaps } = createFrameStats();
   const pager = createPager(PAGES.length, W);
-  const clock = () => desk.clock ?? {};
   // A page animates only while it's on screen (or being swiped into view).
   const on = (i: number) => () => pager.page() === i || pager.dragging();
   return (
     <View debugName="Desk" class={T.screen}>
-      {/* header: mono eyebrow · page dots · clock + link — a 1px rule underneath */}
-      <View class="h-[30] flex-row items-center justify-between px-3">
-        <View class="flex-row items-center gap-2" style={{ width: 150 }}>
-          <View class="w-2 h-2 rounded-[1] border border-[#363636]" />
-          <Text class={T.eyebrow}>{`TB-7304X / ${PAGES[pager.page()]}`}</Text>
-        </View>
-        <View class="flex-row items-center gap-1">
-          <For each={[...PAGES]}>
-            {(_, i) => (
-              <View
-                class={pager.page() === i() ? "w-[18] h-[6] rounded-[3] bg-[#a8c7fa]" : "w-[6] h-[6] rounded-[3] bg-[#363636]"}
-                focusable
-                onPress={() => pager.go(i())}
-              />
-            )}
-          </For>
-        </View>
-        <View class="flex-row items-center justify-end gap-2" style={{ width: 150 }}>
-          <Text class={T.monoSm}>{`${fps()}fps`}</Text>
-          <Text class={T.mono}>{clock().h !== undefined ? `${pad2(clock().h)}:${pad2(clock().m)}` : "--:--"}</Text>
-          <View class={linkConnected() ? "w-2 h-2 rounded-full bg-[#6ee7b7]" : "w-2 h-2 rounded-full bg-[#fb7185]"} />
-        </View>
+      {/* the site's nav: a strip of cells divided by 1px rules; tap to jump */}
+      <View class="h-[28] flex-row bg-[#222222] gap-[1]">
+        <For each={[...PAGES]}>
+          {(name, i) => (
+            <View
+              class={pager.page() === i() ? "flex-1 h-full justify-center px-3 bg-[#141414]" : "flex-1 h-full justify-center px-3 bg-[#0a0a0a] active:bg-[#141414]"}
+              style={{ basis: 0 }}
+              focusable
+              onPress={() => pager.go(i())}
+            >
+              <View class="flex-row items-center justify-between">
+                <Text class={pager.page() === i() ? "text-xs font-bold text-[#ffffff] tracking-wide" : "text-xs font-bold text-[#8a8a8a] tracking-wide"}>
+                  {name.toUpperCase()}
+                </Text>
+                <View class={pager.page() === i() ? "w-[5] h-[5] rounded-[1] bg-[#a8c7fa]" : "w-[5] h-[5] rounded-[1] border border-[#363636]"} />
+              </View>
+            </View>
+          )}
+        </For>
       </View>
       <View class={T.rule} />
       <View class="flex-1 overflow-hidden">
         <pager.Track>
-          <HomePage active={on(0)} />
+          <HomePage active={on(0)} fps={fps} />
           <DeckPage />
           <MusicPage active={on(2)} />
           <ClaudePage active={on(3)} />
-          <SystemPage fps={fps} active={on(4)} />
+          <SystemPage active={on(4)} fps={fps} gaps={gaps} />
         </pager.Track>
       </View>
     </View>
