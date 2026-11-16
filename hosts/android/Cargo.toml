@@ -22,7 +22,9 @@ crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
 # Kiosk mode: the same runtime without the Android framework — draws straight to
-# /dev/graphics/fb0 and reads /dev/input (run as root, framework stopped).
+# the framebuffer (/dev/graphics/fb0 on the stock kernel, /dev/fb0 on mainline)
+# and reads /dev/input (run as root). Also builds for plain Linux, e.g. static
+# aarch64-unknown-linux-musl for mainline + Alpine (no Android crates needed).
 [[bin]]
 name = "pocketjs-kiosk"
 path = "src/kiosk.rs"
@@ -57,6 +59,11 @@ android-activity = { version = "0.6", features = ["native-activity"] }
 ndk = "0.9"
 ndk-sys = "0.6"
 android_logger = "0.14"
+
+# Plain Linux (the kiosk binary on a mainline kernel): rquickjs-sys ships
+# pre-generated bindings for the linux gnu/musl targets, so no bindgen/libclang.
+[target.'cfg(target_os = "linux")'.dependencies]
+rquickjs = "0.12"
 
 [build-dependencies]
 cc = "1"

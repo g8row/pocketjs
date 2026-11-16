@@ -29,6 +29,15 @@ use pocket_mod::Guest;
 
 pub const ADDR: &str = "127.0.0.1:7777";
 
+/// deskd address: `POCKETJS_LINK` (host:port) overrides the default
+/// [`ADDR`] (e.g. to reach deskd directly over Wi-Fi instead of a tunnel).
+fn addr() -> std::net::SocketAddr {
+    std::env::var("POCKETJS_LINK")
+        .ok()
+        .and_then(|a| a.parse().ok())
+        .unwrap_or_else(|| ADDR.parse().unwrap())
+}
+
 /// RGBA8 image pushed by the daemon.
 pub struct Blob {
     pub w: u32,
@@ -76,11 +85,12 @@ impl Link {
     }
 
     fn run(&self) {
+        let addr = addr();
         loop {
-            match TcpStream::connect_timeout(&ADDR.parse().unwrap(), Duration::from_secs(1)) {
+            match TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
                 Ok(stream) => {
                     let _ = stream.set_nodelay(true);
-                    log::info!("link: connected to {ADDR}");
+                    log::info!("link: connected to {addr}");
                     if let Ok(mut w) = stream.try_clone() {
                         let hello = {
                             let mut s = self.0.lock().unwrap();

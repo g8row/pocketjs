@@ -1,12 +1,28 @@
 //! pocketjs-kiosk — the PocketJS runtime with NO Android framework.
 //!
-//! Run as root after stopping zygote/surfaceflinger (see kiosk/kiosk.sh). It
-//! keeps Lenovo's kernel + drivers and talks to them directly:
+//! Two setups, same binary logic (first device found wins):
+//!
+//! Stock Android kernel — run as root after stopping zygote/surfaceflinger
+//! (see kiosk/kiosk.sh). It keeps Lenovo's kernel + drivers:
 //!   display  /dev/graphics/fb0 (mtkfb, 600×1024 portrait, BGRA, 3 buffers;
 //!            the landscape UI is rotated 90° in the blit; FBIOPAN_DISPLAY flips)
 //!   touch    the `mtk-tpd` evdev node (multitouch protocol A or B)
 //!   keys     the `mtk-kpd` evdev node (volume keys → shoulder buttons)
 //!   link     same TCP link to deskd (adbd is native, so adb reverse still works)
+//!
+//! Mainline Linux (Alpine, static musl build) — run as root on the console:
+//!   display  /dev/fb0 (`mediatekdrmfb`, DRM fbdev emulation, 600×1024 XRGB8888,
+//!            one buffer, scanned out directly: no pan needed). The VT is put
+//!            in KD_GRAPHICS so fbcon stops drawing over us.
+//!   touch    `Goodix Capacitive TouchScreen` (MT protocol B, portrait coords)
+//!   keys     `mt6779-keypad` (volume) + `mtk-pmic-keys` (power)
+//!   link     127.0.0.1:7777, tunnelled with `ssh -R 7777:127.0.0.1:7777`
+//!
+//! Overrides (env): POCKETJS_FB=/dev/fbN, POCKETJS_TOUCH=<evdev name or path>,
+//! POCKETJS_KEYS=<names/paths, comma separated>, POCKETJS_KIOSK_PAN=0|1,
+//! POCKETJS_TOUCH_XFORM=[s][x][y] (swap / invert panel axes),
+//! POCKETJS_POWER=exit|ignore, POCKETJS_KIOSK_VT=0 (leave the VT alone),
+//! POCKETJS_LINK=host:port. Bundle dir: argv[1].
 //!
 //! Same incremental raster as the activity host: an idle frame touches no
 //! pixels and issues no pan.
@@ -25,6 +41,14 @@ use pocketjs_core::spec::{btn, ANALOG_CENTER};
 use pocketjs_core::{raster, Ui};
 
 const HOST_ID: &str = "android";
+/// Bundle directory when argv[1] is not given.
+#[cfg(target_os = "android")]
+const DEFAULT_DIR: &str = "/data/local/tmp/pocketjs";
+#[cfg(not(target_os = "android"))]
+const DEFAULT_DIR: &str = "/opt/pocketjs";
+const FB_PATHS: &[&str] = &["/dev/graphics/fb0", "/dev/fb0"];
+const TOUCH_NAMES: &[&str] = &["mtk-tpd", "Goodix Capacitive TouchScreen"];
+const KEY_NAMES: &[&str] = &["mtk-kpd", "mt6779-keypad", "mtk-pmic-keys"];
 const HOST_ABI: u32 = 6;
 const DENSITY: u32 = 2;
 const TICK: Duration = Duration::from_nanos(16_666_667);
@@ -150,7 +174,11 @@ struct Fb {
     /// Slowest FBIOPAN_DISPLAY since the last stats line.
     pan_worst: Duration,
     flip: bool,
+    /// Issue FBIOPAN_DISPLAY after each write (needed by mtkfb).
+    pan: bool,
     panned: bool,
+    /// Rotated dirty region (BGRA u32), reused between frames.
+    scratch: Vec<u32>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -169,7 +197,14 @@ impl Rect {
 
 impl Fb {
     fn open() -> Result<Fb> {
-        let file = OpenOptions::new().read(true).write(true).open("/dev/graphics/fb0").context("open fb0")?;
+        let paths: Vec<String> = match std::env::var("POCKETJS_FB") {
+            Ok(p) => vec![p],
+            Err(_) => FB_PATHS.iter().map(|p| p.to_string()).collect(),
+        };
+        let (path, file) = paths
+            .iter()
+            .find_map(|p| OpenOptions::new().read(true).write(true).open(p).ok().map(|f| (p.clone(), f)))
+            .with_context(|| format!("no framebuffer (tried {})", paths.join(", ")))?;
         let fd = file.as_raw_fd();
         let mut var = FbVar::default();
         let mut fix: FbFix = unsafe { std::mem::zeroed() };
@@ -194,7 +229,20 @@ impl Fb {
             var.xres, var.yres, var.xres_virtual, var.yres_virtual, stride, nbuf, var.red.offset, var.green.offset, var.blue.offset
         );
         let front = (var.yoffset / var.yres.max(1)) as usize % nbuf;
-        Ok(Fb { _file: file, fd, mem: mem as *mut u8, len, var, stride, nbuf, front, history: Vec::new(), age: vec![None; nbuf], pan_worst: Duration::ZERO, flip: std::env::var("POCKETJS_KIOSK_FLIP").is_ok(), panned: false })
+        // mtkfb (stock kernel) only re-reads memory on a pan; a DRM fbdev
+        // emulation buffer is scanned out directly, and its pan is an atomic
+        // commit that can block until vblank — skip it unless there is more
+        // than one buffer to flip between (or POCKETJS_KIOSK_PAN says so).
+        let id_len = fix.id.iter().position(|&b| b == 0).unwrap_or(fix.id.len());
+        let id = String::from_utf8_lossy(&fix.id[..id_len]).into_owned();
+        let flip = std::env::var("POCKETJS_KIOSK_FLIP").is_ok() && nbuf > 1;
+        let pan = match std::env::var("POCKETJS_KIOSK_PAN").as_deref() {
+            Ok("0") => false,
+            Ok(_) => true,
+            Err(_) => flip || id.starts_with("mtkfb"),
+        };
+        log::info!("{path}: id {id:?}, pan {pan}, flip {flip}");
+        Ok(Fb { _file: file, fd, mem: mem as *mut u8, len, var, stride, nbuf, front, history: Vec::new(), age: vec![None; nbuf], pan_worst: Duration::ZERO, flip, pan, panned: false, scratch: Vec::new() })
     }
 
     /// Write `dirty` (landscape render coords) from `rgba` (render_w × render_h,
@@ -232,43 +280,85 @@ impl Fb {
         // (verified against an Android-composited capture) — so write BGRA.
         let (bo, go, ro) = (0u32, 1u32, 2u32);
         // Landscape (lx, ly) → portrait panel (px = pw-1-ly, py = lx).
-        // fb0 is write-combined memory: build each panel row in a scratch
-        // buffer (strided reads from RAM are cheap) and copy it out with one
-        // contiguous memcpy (scattered writes to WC memory are not).
+        // Rotate in TILE×TILE blocks into a cached scratch image (a plain
+        // column walk misses the cache on almost every read: 102 ms for a full
+        // frame on the A53s at 988 MHz vs 15.8 ms tiled, 7.6 ms with NEON), then copy each panel row out with
+        // one contiguous memcpy (mtkfb's mapping is uncached; scattered writes
+        // to it are slow, and the DRM fbdev shadow doesn't mind either way).
+        const TILE: usize = 32;
+        debug_assert_eq!((bo, go, ro), (0, 1, 2));
         let ly0 = r.y0.min(render_h).min(pw);
         let ly1 = r.y1.min(render_h).min(pw);
+        let lx0 = r.x0.min(render_w).min(ph);
         let lx1 = r.x1.min(render_w).min(ph);
-        if ly1 > ly0 {
+        if ly1 > ly0 && lx1 > lx0 {
             let px0 = pw - ly1; // leftmost panel column touched
             let span = ly1 - ly0;
-            let mut row = vec![0u8; span * 4];
-            for lx in r.x0..lx1 {
-                for (i, ly) in (ly0..ly1).rev().enumerate() {
-                    let s = (ly * render_w + lx) * 4;
-                    let d = i * 4;
-                    row[d + bo as usize] = rgba[s + 2];
-                    row[d + go as usize] = rgba[s + 1];
-                    row[d + ro as usize] = rgba[s];
-                    row[d + 3] = 255;
+            let rows = lx1 - lx0;
+            self.scratch.resize(rows * span, 0);
+            let src = rgba.as_ptr();
+            let scratch = self.scratch.as_mut_ptr();
+            // One pixel: RGBA bytes → BGRA bytes, opaque, into its rotated place.
+            let px = |lx: usize, ly: usize| {
+                // SAFETY: ly < render_h and lx < render_w (so the 4 bytes are inside `rgba`), and
+                // lx0 <= lx < lx1, ly0 <= ly < ly1 (so the index is inside `scratch`, rows × span).
+                unsafe {
+                    let p = u32::from_le(std::ptr::read_unaligned(src.add((ly * render_w + lx) * 4) as *const u32));
+                    *scratch.add((lx - lx0) * span + (ly1 - 1 - ly)) = 0xff00_0000 | (p & 0x0000_ff00) | ((p & 0xff) << 16) | ((p >> 16) & 0xff);
                 }
+            };
+            for by in (ly0..ly1).step_by(TILE) {
+                let by1 = (by + TILE).min(ly1);
+                for bx in (lx0..lx1).step_by(TILE) {
+                    let bx1 = (bx + TILE).min(lx1);
+                    // Whole 4×4 blocks with NEON (7.6 ms for a full frame vs 15.8 ms scalar on the A53s),
+                    // the rest (a dirty rect's ragged edges) one pixel at a time.
+                    #[cfg(target_arch = "aarch64")]
+                    let (vy1, vx1) = {
+                        let vy1 = by + (by1 - by) / 4 * 4;
+                        let vx1 = bx + (bx1 - bx) / 4 * 4;
+                        for ly in (by..vy1).step_by(4) {
+                            for lx in (bx..vx1).step_by(4) {
+                                // SAFETY: rows ly..ly+4 < by1 <= render_h and columns lx..lx+4 < bx1 <= render_w
+                                // are inside `rgba`; the four output runs are inside `scratch` (see `px`).
+                                unsafe { rotate4x4(src, render_w, lx, ly, scratch.add((lx - lx0) * span + (ly1 - 4 - ly)), span) };
+                            }
+                        }
+                        (vy1, vx1)
+                    };
+                    #[cfg(not(target_arch = "aarch64"))]
+                    let (vy1, vx1) = (by, bx);
+                    for ly in by..vy1 {
+                        for lx in vx1..bx1 {
+                            px(lx, ly);
+                        }
+                    }
+                    for ly in vy1..by1 {
+                        for lx in bx..bx1 {
+                            px(lx, ly);
+                        }
+                    }
+                }
+            }
+            for (i, lx) in (lx0..lx1).enumerate() {
                 let d = base + lx * self.stride + px0 * 4;
                 // SAFETY: lx < ph rows and px0 + span <= pw columns, inside buffer `back`.
                 unsafe {
-                    std::ptr::copy_nonoverlapping(row.as_ptr(), self.mem.add(d), row.len());
+                    std::ptr::copy_nonoverlapping(self.scratch[i * span..].as_ptr() as *const u8, self.mem.add(d), span * 4);
                 }
             }
         }
         let mut var = self.var;
         var.yoffset = (back * ph) as u32;
         var.xoffset = 0;
-        {
+        if self.pan {
             let tp = Instant::now();
             unsafe {
                 libc::ioctl(self.fd, FBIOPAN_DISPLAY as _, &mut var);
             }
             self.pan_worst = self.pan_worst.max(tp.elapsed());
-            self.panned = true;
         }
+        self.panned = true;
         self.front = back;
         // Book-keeping: every buffer ages by one frame; `back` is fresh.
         for (i, a) in self.age.iter_mut().enumerate() {
@@ -277,6 +367,37 @@ impl Fb {
         self.history.push(dirty);
         if self.history.len() > 8 {
             self.history.remove(0);
+        }
+    }
+}
+
+/// Rotate one 4×4 block of the landscape RGBA image (columns `lx..lx+4`, rows `ly..ly+4`) 90° clockwise into
+/// four BGRA runs: panel row `lx + k` gets `[ly+3, ly+2, ly+1, ly]` of column `lx + k`, written at
+/// `dst + k * stride` (u32 units).
+///
+/// # Safety
+/// The 4×4 source block must be inside `src` (row length `render_w` pixels) and the four 4-pixel runs inside `dst`.
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+unsafe fn rotate4x4(src: *const u8, render_w: usize, lx: usize, ly: usize, dst: *mut u32, stride: usize) {
+    use std::arch::aarch64::*;
+    const SWIZZLE: [u8; 16] = [2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15];
+    unsafe {
+        let tbl = vld1q_u8(SWIZZLE.as_ptr());
+        let alpha = vdupq_n_u32(0xff00_0000);
+        let row = |k: usize| vreinterpretq_u32_u8(vld1q_u8(src.add(((ly + k) * render_w + lx) * 4)));
+        let (r0, r1, r2, r3) = (row(0), row(1), row(2), row(3));
+        let p = vtrnq_u32(r3, r2);
+        let q = vtrnq_u32(r1, r0);
+        let cols = [
+            vcombine_u32(vget_low_u32(p.0), vget_low_u32(q.0)),
+            vcombine_u32(vget_low_u32(p.1), vget_low_u32(q.1)),
+            vcombine_u32(vget_high_u32(p.0), vget_high_u32(q.0)),
+            vcombine_u32(vget_high_u32(p.1), vget_high_u32(q.1)),
+        ];
+        for (k, c) in cols.into_iter().enumerate() {
+            let bgra = vorrq_u32(vreinterpretq_u32_u8(vqtbl1q_u8(vreinterpretq_u8_u32(c), tbl)), alpha);
+            vst1q_u8(dst.add(k * stride) as *mut u8, vreinterpretq_u8_u32(bgra));
         }
     }
 }
@@ -290,6 +411,15 @@ impl Drop for Fb {
 }
 
 // ---- input --------------------------------------------------------------------------
+
+/// An evdev spec: a path (`/dev/input/…`) as is, else a device name.
+fn resolve_event(spec: &str) -> Option<String> {
+    if spec.starts_with('/') {
+        std::path::Path::new(spec).exists().then(|| spec.to_string())
+    } else {
+        find_event(spec)
+    }
+}
 
 fn find_event(name: &str) -> Option<String> {
     let devices = std::fs::read_to_string("/proc/bus/input/devices").ok()?;
@@ -356,11 +486,22 @@ struct Touch {
     single: Option<(i32, i32)>,   // ABS_X/Y fallback
     btn: bool,
     proto_a: bool,
+    /// POCKETJS_TOUCH_XFORM: swap axes, then invert x / y (normalized panel space).
+    swap: bool,
+    inv_x: bool,
+    inv_y: bool,
 }
 
 impl Touch {
     fn open() -> Result<Touch> {
-        let path = find_event("mtk-tpd").context("no mtk-tpd touch device")?;
+        let specs: Vec<String> = match std::env::var("POCKETJS_TOUCH") {
+            Ok(s) => vec![s],
+            Err(_) => TOUCH_NAMES.iter().map(|s| s.to_string()).collect(),
+        };
+        let path = specs
+            .iter()
+            .find_map(|s| resolve_event(s))
+            .with_context(|| format!("no touch device (tried {})", specs.join(", ")))?;
         let file = open_input(&path)?;
         let mut xr = abs_range(&file, ABS_MT_POSITION_X);
         let mut yr = abs_range(&file, ABS_MT_POSITION_Y);
@@ -368,7 +509,8 @@ impl Touch {
             xr = abs_range(&file, ABS_X);
             yr = abs_range(&file, ABS_Y);
         }
-        log::info!("touch {path}: x {:?} y {:?}", xr, yr);
+        let xform = std::env::var("POCKETJS_TOUCH_XFORM").unwrap_or_default();
+        log::info!("touch {path}: x {:?} y {:?} xform {xform:?}", xr, yr);
         Ok(Touch {
             file,
             xr,
@@ -380,6 +522,9 @@ impl Touch {
             single: None,
             btn: false,
             proto_a: false,
+            swap: xform.contains('s'),
+            inv_x: xform.contains('x'),
+            inv_y: xform.contains('y'),
         })
     }
 
@@ -419,8 +564,27 @@ impl Touch {
         }
     }
 
-    /// Contacts as (id, panel x, panel y) normalized to 0..1.
+    /// Contacts as (id, panel x, panel y) normalized to 0..1, after the
+    /// optional POCKETJS_TOUCH_XFORM correction.
     fn contacts(&self) -> Vec<(u32, f32, f32)> {
+        let mut c = self.raw_contacts();
+        if self.swap || self.inv_x || self.inv_y {
+            for (_, x, y) in c.iter_mut() {
+                if self.swap {
+                    std::mem::swap(x, y);
+                }
+                if self.inv_x {
+                    *x = 1.0 - *x;
+                }
+                if self.inv_y {
+                    *y = 1.0 - *y;
+                }
+            }
+        }
+        c
+    }
+
+    fn raw_contacts(&self) -> Vec<(u32, f32, f32)> {
         let nx = |x: i32| (x - self.xr.0) as f32 / (self.xr.1 - self.xr.0) as f32;
         let ny = |y: i32| (y - self.yr.0) as f32 / (self.yr.1 - self.yr.0) as f32;
         if self.proto_a {
@@ -447,19 +611,29 @@ impl Touch {
 }
 
 struct Keys {
-    file: Option<File>,
+    files: Vec<File>,
     buttons: u32,
 }
 
 impl Keys {
+    /// Every key device present: the stock kernel has one (`mtk-kpd`),
+    /// mainline splits volume (`mt6779-keypad`) and power (`mtk-pmic-keys`).
     fn open() -> Keys {
-        let file = find_event("mtk-kpd").and_then(|p| open_input(&p).ok());
-        Keys { file, buttons: 0 }
+        let specs: Vec<String> = match std::env::var("POCKETJS_KEYS") {
+            Ok(s) => s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+            Err(_) => KEY_NAMES.iter().map(|s| s.to_string()).collect(),
+        };
+        let mut paths: Vec<String> = specs.iter().filter_map(|s| resolve_event(s)).collect();
+        paths.dedup();
+        log::info!("keys: {paths:?}");
+        let files = paths.iter().filter_map(|p| open_input(p).ok()).collect();
+        Keys { files, buttons: 0 }
     }
     fn pump(&mut self) -> bool {
-        let Some(f) = self.file.as_mut() else { return false };
         let mut evs = Vec::new();
-        read_events(f, &mut evs);
+        for f in self.files.iter_mut() {
+            read_events(f, &mut evs);
+        }
         let mut power = false;
         for (ty, code, v) in evs {
             if ty != EV_KEY {
@@ -539,17 +713,97 @@ fn rasterize(ui: &Ui, words: &[u32], rgba: &mut [u8], tracker: &mut DamageTracke
     }
 }
 
-fn main() -> Result<()> {
+#[cfg(target_os = "android")]
+fn init_log() {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Info).with_tag("pocketjs-kiosk"),
     );
-    let dir = std::env::args().nth(1).unwrap_or_else(|| "/data/local/tmp/pocketjs".into());
+}
+
+/// No logcat off Android: log lines go to stderr (kiosk log file / console).
+#[cfg(not(target_os = "android"))]
+fn init_log() {
+    struct Stderr;
+    impl log::Log for Stderr {
+        fn enabled(&self, m: &log::Metadata) -> bool {
+            m.level() <= log::Level::Info
+        }
+        fn log(&self, r: &log::Record) {
+            if self.enabled(r.metadata()) {
+                eprintln!("pocketjs-kiosk {} {}", r.level(), r.args());
+            }
+        }
+        fn flush(&self) {}
+    }
+    static LOGGER: Stderr = Stderr;
+    let _ = log::set_logger(&LOGGER).map(|()| log::set_max_level(log::LevelFilter::Info));
+}
+
+// ---- console / signals ---------------------------------------------------------------
+
+const KDSETMODE: libc::c_ulong = 0x4B3A;
+const KD_TEXT: libc::c_int = 0;
+const KD_GRAPHICS: libc::c_int = 1;
+
+/// Puts the active VT in graphics mode (fbcon stops drawing text and the
+/// cursor over fb0) and restores text mode when dropped. No-op without a VT
+/// (stock Android) or with POCKETJS_KIOSK_VT=0.
+struct Vt(Option<File>);
+
+impl Vt {
+    fn graphics() -> Vt {
+        if std::env::var("POCKETJS_KIOSK_VT").as_deref() == Ok("0") {
+            return Vt(None);
+        }
+        for p in ["/dev/tty0", "/dev/tty1"] {
+            if let Ok(f) = OpenOptions::new().read(true).write(true).open(p) {
+                if unsafe { libc::ioctl(f.as_raw_fd(), KDSETMODE as _, KD_GRAPHICS) } == 0 {
+                    log::info!("{p}: KD_GRAPHICS");
+                    return Vt(Some(f));
+                }
+            }
+        }
+        Vt(None)
+    }
+}
+
+impl Drop for Vt {
+    fn drop(&mut self) {
+        if let Some(f) = &self.0 {
+            unsafe {
+                libc::ioctl(f.as_raw_fd(), KDSETMODE as _, KD_TEXT);
+            }
+        }
+    }
+}
+
+static STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn on_signal(_: libc::c_int) {
+    STOP.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn main() -> Result<()> {
+    init_log();
+    // SIGTERM/SIGINT end the loop normally so the VT is restored.
+    unsafe {
+        libc::signal(libc::SIGTERM, on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t);
+        libc::signal(libc::SIGINT, on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t);
+    }
+    let dir = std::env::args().nth(1).unwrap_or_else(|| DEFAULT_DIR.into());
     let (mut js, mut pak, mut vp) = load(&dir)?;
     let link = Link::start(hello(&js, &pak, vp));
     let mut rt = boot(&js, &pak, vp, &link)?;
+    let _vt = Vt::graphics();
     let mut fb = Fb::open()?;
-    let mut touch = Touch::open()?;
+    // The touchscreen can appear after we start (on mainline the Goodix driver probes late), so run without it
+    // and look for it again every second instead of failing.
+    let mut touch = Touch::open().map_err(|e| log::warn!("{e:#}; retrying every 1 s")).ok();
+    let mut touch_retry = Instant::now() + Duration::from_secs(1);
     let mut keys = Keys::open();
+    // Power key: exit (the default; on the stock kernel kiosk.sh then restarts
+    // Android, on mainline the process just ends) or ignore it.
+    let power_exits = std::env::var("POCKETJS_POWER").as_deref() != Ok("ignore");
     eprintln!("pocketjs-kiosk: running {dir} ({}x{} logical)", vp.0, vp.1);
 
     let (mut rw, mut rh) = ((vp.0 * DENSITY) as usize, (vp.1 * DENSITY) as usize);
@@ -559,8 +813,18 @@ fn main() -> Result<()> {
     let mut next = Instant::now();
     let (mut n, mut total, mut worst) = (0u32, Duration::ZERO, Duration::ZERO);
     let mut worst_phases = String::new();
+    // POCKETJS_STATS=1: one line per second (frames, average phases of the frames that drew) — for
+    // measuring transitions, where the 300-frame summary hides how many frames actually made it.
+    let sec_stats = std::env::var("POCKETJS_STATS").as_deref() == Ok("1");
+    let mut sec_t0 = Instant::now();
+    let (mut sec_frames, mut sec_drawn) = (0u32, 0u32);
+    let mut sec_ph = [0f64; 5];
 
     loop {
+        if STOP.load(std::sync::atomic::Ordering::Relaxed) {
+            eprintln!("pocketjs-kiosk: signal → exit");
+            return Ok(());
+        }
         let now = Instant::now();
         if now < next {
             std::thread::sleep(next - now);
@@ -590,15 +854,23 @@ fn main() -> Result<()> {
             }
         }
 
-        touch.pump();
-        if keys.pump() {
-            // Power key: hand the device back to Android (kiosk.sh restarts the framework).
+        if touch.is_none() && Instant::now() >= touch_retry {
+            touch = Touch::open().ok();
+            touch_retry = Instant::now() + Duration::from_secs(1);
+        }
+        if let Some(t) = touch.as_mut() {
+            t.pump();
+        }
+        if keys.pump() && power_exits {
+            // Power key: hand the device back (kiosk.sh restarts Android on the stock kernel).
             eprintln!("pocketjs-kiosk: power key → exit");
             return Ok(());
         }
         // Panel portrait (px, py) → landscape logical (lx = py, ly = 1 - px).
         let touches: Vec<u32> = touch
-            .contacts()
+            .as_ref()
+            .map(|t| t.contacts())
+            .unwrap_or_default()
             .into_iter()
             .map(|(id, x, y)| {
                 let lx = ((y * vp.0 as f32) as u32).min(vp.0 - 1);
@@ -637,6 +909,25 @@ fn main() -> Result<()> {
         }
 
         let dt = t0.elapsed();
+        if sec_stats {
+            let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+            sec_frames += 1;
+            if full || forced || !plan.is_empty() {
+                sec_drawn += 1;
+                for (acc, v) in sec_ph.iter_mut().zip([ms(ta - t0), ms(tb - ta), ms(tc - tb), ms(td - tc), ms(td.elapsed())]) {
+                    *acc += v;
+                }
+            }
+            if sec_t0.elapsed() >= Duration::from_secs(1) {
+                let k = sec_drawn.max(1) as f64;
+                eprintln!(
+                    "sec: {sec_frames} frames, {sec_drawn} drawn; avg drawn pre {:.1} js {:.1} core {:.1} raster {:.1} present {:.1} ms",
+                    sec_ph[0] / k, sec_ph[1] / k, sec_ph[2] / k, sec_ph[3] / k, sec_ph[4] / k
+                );
+                sec_t0 = Instant::now();
+                (sec_frames, sec_drawn, sec_ph) = (0, 0, [0.0; 5]);
+            }
+        }
         n += 1;
         total += dt;
         if dt > worst {
