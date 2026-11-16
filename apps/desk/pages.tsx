@@ -7,10 +7,11 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import { Image, Text, View, type NodeMirror } from "@pocketjs/framework/components";
 import { onFrame } from "@pocketjs/framework/lifecycle";
-import { createJumpBatch } from "@pocketjs/framework/animation";
+import { createJumpBatch, jump, spring } from "@pocketjs/framework/animation";
 import { act, blobSrc, desk, linkConnected } from "./link.ts";
 import { Ridges } from "./ridges.tsx";
-import { T } from "./theme.ts";
+import { T, TILE_HEX, accent } from "./theme.ts";
+import { DECOR_STEP, decorFrame, decorPhase, minVisibleDeg } from "./clock.ts";
 
 type Active = () => boolean;
 const pad2 = (n: number) => (n < 10 ? `0${n}` : `${n}`);
@@ -35,7 +36,9 @@ export function createFrameStats() {
     last = now;
     n++;
     if (now - t0 >= 1000) {
-      setFps(Math.round((n * 1000) / (now - t0)));
+      // clamp: 59/60/61 jitter would re-render (and relayout) every
+      // fps label once a second for nothing
+      setFps(Math.min(60, Math.round((n * 1000) / (now - t0))));
       n = 0;
       t0 = now;
     }
@@ -47,22 +50,26 @@ export function createFrameStats() {
 export function Cookie(props: { size: number; speed?: number; active?: Active; dim?: boolean }) {
   const nodes: NodeMirror[] = [];
   let angle = 0;
+  let drawn = -999;
   let batch: ReturnType<typeof createJumpBatch> | undefined;
   onFrame(() => {
     if (props.active && !props.active()) return;
     if (!batch && nodes.length === 2) batch = createJumpBatch(nodes.map((n) => [n, "rotate"] as const));
-    if (!batch) return;
-    angle = (angle + (props.speed ?? 0.5)) % 360;
+    if (!batch || !decorFrame()) return;
+    angle = (angle + (props.speed ?? 0.5) * DECOR_STEP) % 360;
+    // repaint only once the pose moved visibly (slow spins are 0.4–0.8°/frame)
+    if (Math.abs(angle - drawn) < minVisibleDeg(props.size)) return;
+    drawn = angle;
     batch.set(0, angle);
     batch.set(1, angle + 45);
     batch.commit();
   });
   const s = () => props.size * 0.74;
-  const cls = () => (props.dim ? "absolute bg-[#363636]" : "absolute bg-[#a8c7fa]");
+  const cls = () => "absolute";
   return (
     <View class="relative items-center justify-center" style={{ width: props.size, height: props.size }}>
-      <View ref={(n: NodeMirror) => nodes.push(n)} class={cls()} style={{ width: s(), height: s(), radius: props.size * 0.24 }} />
-      <View ref={(n: NodeMirror) => nodes.push(n)} class={cls()} style={{ width: s(), height: s(), radius: props.size * 0.24 }} />
+      <View ref={(n: NodeMirror) => nodes.push(n)} class={cls()} style={{ width: s(), height: s(), radius: props.size * 0.24, bgColor: props.dim ? "#363636" : accent() }} />
+      <View ref={(n: NodeMirror) => nodes.push(n)} class={cls()} style={{ width: s(), height: s(), radius: props.size * 0.24, bgColor: props.dim ? "#363636" : accent() }} />
     </View>
   );
 }
@@ -72,7 +79,7 @@ function Cell(props: { label: string; value: string; accent?: boolean }) {
   return (
     <View class="flex-1 flex-col justify-center gap-1 px-3" style={{ basis: 0 }}>
       <Text class={T.monoSm}>{props.label}</Text>
-      <Text class={props.accent ? "text-base text-[#a8c7fa]" : "text-base text-[#ededed]"}>{props.value}</Text>
+      <Text class="text-base" style={{ textColor: props.accent ? accent() : "#ededed" }}>{props.value}</Text>
     </View>
   );
 }
@@ -97,14 +104,14 @@ export function HomePage(props: { active: Active; fps: () => number }) {
       <View class="flex-1 flex-col relative">
         {/* the ridge field sits behind the type, right-aligned like the site */}
         <View class="absolute flex-row justify-end" style={{ insetT: 4, insetR: 6, insetL: 160, insetB: 0 }}>
-          <Ridges cols={42} rows={20} ridges={9} every={3} active={props.active} />
+          <Ridges cols={42} rows={20} ridges={9} every={8} active={props.active} />
         </View>
         <View class="flex-row justify-between px-4 pt-3">
           <Text class={T.monoSm}>desk companion at your mac</Text>
           <Text class={T.monoSm}>{`android · pocketjs · ${props.fps()}fps`}</Text>
         </View>
         <View class="flex-col px-4 pt-3">
-          <Text class={T.displayAccent}>{clock().h !== undefined ? `${pad2(clock().h)}:${pad2(clock().m)}` : "--:--"}</Text>
+          <Text class="text-4xl leading-[38]" style={{ textColor: accent() }}>{clock().h !== undefined ? `${pad2(clock().h)}:${pad2(clock().m)}` : "--:--"}</Text>
           <Text class={T.display}>{day().day || "today"}</Text>
           <Text class={T.display}>{day().date}</Text>
         </View>
@@ -126,40 +133,67 @@ export function HomePage(props: { active: Active; fps: () => number }) {
   );
 }
 
-// ---- 2. deck: small project cards --------------------------------------------------------
+// ---- 2. deck: small project cards (tiles come from desk.config.json) -------------
 
-const KIND: Record<string, string> = { mic: "audio", vol: "audio", open: "app", screenshot: "capture", music: "media" };
+function Tile(props: { t: any; active: Active; compact: boolean }) {
+  let card: NodeMirror | undefined;
+  let mark: NodeMirror | undefined;
+  let a = Math.random() * 90;
+  onFrame(() => {
+    if (!props.active() || !mark || !decorFrame()) return;
+    a = (a + 0.5 * DECOR_STEP) % 360;
+    // a 9 px mark: 2° steps at 15 Hz look the same and repaint 4× less;
+    // all tiles step on the same global phase → one posted frame
+    if (decorPhase(4)) jump(mark, "rotate", a);
+  });
+  const press = () => {
+    if (card) {
+      jump(card, "scale", 0.93);
+      spring(card, "scale", 1);
+    }
+    act(props.t.id);
+  };
+  const hot = () => props.t.sub === "MUTED";
+  return (
+    <View
+      ref={(n: NodeMirror) => (card = n)}
+      class="flex-1 h-full flex-col justify-between rounded-[18] bg-gradient-to-b from-[#161616] to-[#101010] border border-[#222222] p-3 active:border-[#5a5a5a]"
+      style={{ basis: 0 }}
+      focusable
+      onPress={press}
+    >
+      <View class="flex-row items-center justify-between">
+        <Text class="text-base text-[#ededed]">{lower(clip(props.t.label, 12))}</Text>
+        <View ref={(n: NodeMirror) => (mark = n)} class="w-[9] h-[9] rounded-[3]" style={{ bgColor: TILE_HEX[props.t.color] ?? "#8a8a8a" }} />
+      </View>
+      <Show when={!props.compact}>
+        <Text class={T.monoSm}>{lower(clip(props.t.sub || props.t.kind || "action", 18))}</Text>
+      </Show>
+      <View class="flex-row">
+        <View class={hot() ? T.chipA : T.chipO}>
+          <Text class="text-xs font-bold" style={{ textColor: hot() ? accent() : "#8a8a8a" }}>
+            {props.compact ? lower(clip(props.t.sub || props.t.kind, 14)) : lower(props.t.kind ?? "action")}
+          </Text>
+        </View>
+      </View>
+    </View>
+  );
+}
 
-export function DeckPage() {
-  const tiles = createMemo<any[]>(() => (desk.deck?.tiles ?? []).slice(0, 6));
+export function DeckPage(props: { active: Active }) {
+  const tiles = createMemo<any[]>(() => (desk.deck?.tiles ?? []).slice(0, 12));
+  const rows = createMemo(() => Math.max(1, Math.ceil(tiles().length / 3)));
   const row = (i: number) => tiles().slice(i * 3, i * 3 + 3);
   return (
     <View class="h-full flex-col gap-2 p-3" style={{ width: 512 }}>
-      <For each={[0, 1]}>
+      <For each={[0, 1, 2, 3]}>
         {(r) => (
-          <View class="flex-row gap-2 flex-1">
-            <For each={row(r)}>
-              {(t) => (
-                <View
-                  class="flex-1 h-full flex-col justify-between rounded-[18] bg-gradient-to-b from-[#161616] to-[#101010] border border-[#222222] p-3 active:border-[#a8c7fa]"
-                  style={{ basis: 0 }}
-                  focusable
-                  onPress={() => act(t.id)}
-                >
-                  <View class="flex-row items-center justify-between">
-                    <Text class="text-base text-[#ededed]">{lower(clip(t.label, 12))}</Text>
-                    <Text class={T.monoSm}>↗</Text>
-                  </View>
-                  <Text class={T.monoSm}>{lower(clip(t.sub ?? KIND[t.id.split(".")[0]] ?? "action", 18))}</Text>
-                  <View class="flex-row">
-                    <View class={t.sub === "MUTED" ? T.chipA : T.chipO}>
-                      <Text class={t.sub === "MUTED" ? "text-xs font-bold text-[#a8c7fa]" : T.monoSm}>{lower(t.id)}</Text>
-                    </View>
-                  </View>
-                </View>
-              )}
-            </For>
-          </View>
+          <Show when={r < rows()}>
+            <View class="flex-row gap-2 flex-1">
+              <For each={row(r)}>{(t) => <Tile t={t} active={props.active} compact={rows() > 2} />}</For>
+              <For each={Array.from({ length: 3 - row(r).length })}>{() => <View class="flex-1" style={{ basis: 0 }} />}</For>
+            </View>
+          </Show>
         )}
       </For>
     </View>
@@ -182,7 +216,7 @@ export function MusicPage(props: { active: Active }) {
   let phase = 0;
   let amp = 0;
   onFrame(() => {
-    if (!props.active()) return;
+    if (!props.active() || !decorFrame()) return;
     const p = m().position ?? 0;
     if (p !== basePos) {
       basePos = p;
@@ -190,11 +224,13 @@ export function MusicPage(props: { active: Active }) {
     }
     setPos(playing() ? basePos + (Date.now() - baseAt) / 1000 : basePos);
     // the centuryplay wave: a travelling sine that flattens when paused
-    amp += ((playing() ? 4 : 0.4) - amp) * 0.08;
-    phase += 0.09;
+    amp += ((playing() ? 4 : 0.4) - amp) * 0.16;
+    phase += 0.09 * DECOR_STEP;
     if (!batch && dots.length === WAVE_N) batch = createJumpBatch(dots.map((d) => [d, "translateY"] as const));
     if (batch) {
-      for (let i = 0; i < WAVE_N; i++) batch.set(i, Math.sin(i * 0.55 - phase) * amp);
+      // whole pixels: fractional offsets add AA span ops, and an op-count
+      // change makes the core repaint the full screen
+      for (let i = 0; i < WAVE_N; i++) batch.set(i, Math.round(Math.sin(i * 0.55 - phase) * amp));
       batch.commit();
     }
   });
@@ -215,7 +251,7 @@ export function MusicPage(props: { active: Active }) {
           </View>
           <Text class={T.monoSm}>on mac</Text>
         </View>
-        <View class="rounded-[14] bg-[#1d1d1d] border border-[#a8c7fa] flex-col gap-1 p-3">
+        <View class="rounded-[14] bg-[#1d1d1d] border flex-col gap-1 p-3" style={{ borderColor: accent() }}>
           <View class="flex-row items-center gap-2">
             <View class="w-[26] h-[26] rounded-[8] bg-[#141414] items-center justify-center">
               <Cookie size={14} speed={playing() ? 2.5 : 0} active={props.active} />
@@ -230,7 +266,8 @@ export function MusicPage(props: { active: Active }) {
               {(i) => (
                 <View
                   ref={(n: NodeMirror) => dots.push(n)}
-                  class={i < playedDots() ? "w-[4] h-[2] rounded-[1] bg-[#a8c7fa]" : "w-[4] h-[2] rounded-[1] bg-[#363636]"}
+                  class="w-[4] h-[2] rounded-[1]"
+                  style={{ bgColor: i < playedDots() ? accent() : "#363636" }}
                 />
               )}
             </For>
@@ -244,74 +281,13 @@ export function MusicPage(props: { active: Active }) {
           <View class="flex-1 h-[34] rounded-[999] border border-[#363636] items-center justify-center active:bg-[#1d1d1d]" style={{ basis: 0 }} focusable onPress={() => act("music.prev")}>
             <Text class="text-sm text-[#ededed]">prev</Text>
           </View>
-          <View class="flex-1 h-[34] rounded-[999] bg-[#a8c7fa] items-center justify-center active:bg-[#7fa7e8]" style={{ basis: 0 }} focusable onPress={() => act("music.toggle")}>
+          <View class="flex-1 h-[34] rounded-[999] items-center justify-center" style={{ basis: 0, bgColor: accent() }} focusable onPress={() => act("music.toggle")}>
             <Text class="text-sm text-[#0b1d33]">{playing() ? "pause" : "play"}</Text>
           </View>
           <View class="flex-1 h-[34] rounded-[999] border border-[#363636] items-center justify-center active:bg-[#1d1d1d]" style={{ basis: 0 }} focusable onPress={() => act("music.next")}>
             <Text class="text-sm text-[#ededed]">next</Text>
           </View>
         </View>
-      </View>
-    </View>
-  );
-}
-
-// ---- 4. claude: device-style rows ----------------------------------------------------------
-
-const ROW: Record<string, string> = {
-  waiting: "flex-row items-center gap-3 rounded-[14] bg-[#1d1d1d] border border-[#a8c7fa] px-3 py-2",
-  working: "flex-row items-center gap-3 rounded-[14] bg-[#1d1d1d] border border-[#222222] px-3 py-2",
-  done: "flex-row items-center gap-3 rounded-[14] bg-[#141414] border border-[#222222] px-3 py-2",
-  idle: "flex-row items-center gap-3 rounded-[14] bg-[#141414] border border-[#222222] px-3 py-2",
-};
-const STATE: Record<string, string> = { waiting: "needs you", working: "working", done: "done", idle: "idle" };
-
-export function ClaudePage(props: { active: Active }) {
-  const sessions = createMemo<any[]>(() => (desk.claude?.sessions ?? []).slice(0, 4));
-  return (
-    <View class="h-full flex-col p-3" style={{ width: 512 }}>
-      <View class="rounded-[18] bg-gradient-to-b from-[#161616] to-[#101010] border border-[#222222] overflow-hidden flex-1 flex-col gap-2 p-3">
-        <View class="flex-row items-center justify-between">
-          <View class="flex-row items-center gap-2">
-            <Cookie size={18} speed={0.8} active={props.active} />
-            <Text class="text-lg text-[#ededed]">claude code</Text>
-          </View>
-          <Text class={T.monoSm}>
-            {desk.claude?.hooks === false ? "hooks not installed" : `${desk.claude?.sessions?.length ?? 0} ${(desk.claude?.sessions?.length ?? 0) === 1 ? "session" : "sessions"} on mac`}
-          </Text>
-        </View>
-        <For
-          each={sessions()}
-          fallback={
-            <View class="flex-1 items-center justify-center gap-3">
-              <Cookie size={56} speed={0.4} dim active={props.active} />
-              <Text class={T.monoSm}>no active sessions</Text>
-            </View>
-          }
-        >
-          {(s) => (
-            <View class={ROW[s.state] ?? ROW.idle}>
-              <View class="w-[26] h-[26] rounded-[8] bg-[#141414] items-center justify-center">
-                <Show
-                  when={s.state === "working"}
-                  fallback={<Text class={s.state === "waiting" ? "text-sm text-[#a8c7fa]" : "text-sm text-[#8a8a8a]"}>{s.state === "done" ? "✓" : "●"}</Text>}
-                >
-                  <Cookie size={14} speed={3} active={props.active} />
-                </Show>
-              </View>
-              <View class="flex-1 flex-col">
-                <Text class="text-base text-[#ededed]">{lower(clip(s.name, 30))}</Text>
-                <Text class={T.monoSm}>{lower(clip(s.detail, 40))}</Text>
-              </View>
-              <View class="w-[78] flex-col items-end gap-1">
-                <View class={s.state === "waiting" ? T.chipA : T.chipO}>
-                  <Text class={s.state === "waiting" ? "text-xs font-bold text-[#a8c7fa]" : T.monoSm}>{STATE[s.state] ?? s.state}</Text>
-                </View>
-                <Text class={T.monoSm}>{s.ago ?? ""}</Text>
-              </View>
-            </View>
-          )}
-        </For>
       </View>
     </View>
   );
@@ -340,6 +316,9 @@ export function SystemPage(props: { active: Active; fps: () => number; gaps: num
     if (!props.active()) return;
     if (!batch && bars.length === BARS) batch = createJumpBatch(bars.map((b) => [b, "scaleY"] as const));
     if (!batch) return;
+    // 15 Hz is plenty for a frame-time graph, and each update re-rasters
+    // the whole plot (it was ~10 ms/frame at 60 Hz)
+    if (!decorPhase(4)) return;
     // bar height ∝ frame time; the dashed line marks the 16.7 ms budget (60 Hz)
     for (let i = 0; i < BARS; i++) batch.set(i, Math.max(0.04, Math.min(1, (props.gaps[i] ?? 16.7) / 33.4)));
     batch.commit();
@@ -355,20 +334,20 @@ export function SystemPage(props: { active: Active; fps: () => number; gaps: num
         <View class="flex-1 flex-col justify-end">
           <View class="relative w-full h-[148] flex-row items-end justify-between">
             <For each={Array.from({ length: BARS })}>
-              {() => <View ref={(n: NodeMirror) => bars.push(n)} class="w-[3] h-[148] rounded-[1] bg-[#5a5a5a]" style={{ originY: 0.5 }} />}
+              {() => <View ref={(n: NodeMirror) => bars.push(n)} class="w-[3] h-[148] bg-[#5a5a5a]" style={{ originY: 0.5 }} />}
             </For>
             {/* budget line at 16.7 ms = half the 33.4 ms scale */}
             <View class="absolute flex-row justify-between" style={{ insetL: 0, insetR: 0, insetB: 74 }}>
-              <For each={Array.from({ length: 34 })}>{() => <View class="w-[3] h-[1] bg-[#a8c7fa]" />}</For>
+              <For each={Array.from({ length: 34 })}>{() => <View class="w-[3] h-[1]" style={{ bgColor: accent() }} />}</For>
             </View>
             <View class="absolute" style={{ insetL: 0, insetB: 78 }}>
-              <Text class="text-xs font-bold text-[#a8c7fa]">16.7 ms</Text>
+              <Text class="text-xs font-bold" style={{ textColor: accent() }}>16.7 ms</Text>
             </View>
           </View>
         </View>
         <View class="flex-row justify-between pt-2">
           <Text class={T.monoSm}>frame time</Text>
-          <Text class="text-xs font-bold text-[#a8c7fa]">{`${props.fps()} fps`}</Text>
+          <Text class="text-xs font-bold" style={{ textColor: accent() }}>{`${props.fps()} fps`}</Text>
         </View>
       </View>
       <View class="flex-col justify-between" style={{ width: 196 }}>

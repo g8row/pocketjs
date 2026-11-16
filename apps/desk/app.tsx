@@ -1,59 +1,120 @@
 // Desk — the TB-7304X desk companion (activity host and kiosk mode).
-// Five swipeable panes fed by deskd over the USB link, built from g8row.xyz's
-// components. 512×300 logical = the 1024×600 panel at 2x.
+// Swipeable panes fed by deskd over the USB link. Which panes, and in what
+// order, comes from deskd's `layout` state (desk.config.json, edited in the
+// Desk Studio UI); the pager is rebuilt whenever that list changes.
+// 512×300 logical = the 1024×600 panel at 2x.
 
-import { For } from "solid-js";
+import { For, Show, createEffect, createMemo, on } from "solid-js";
 import { Text, View } from "@pocketjs/framework/components";
-import { useLink } from "./link.ts";
+import { desk, useLink } from "./link.ts";
+import { useDecorClock } from "./clock.ts";
 import { createPager } from "./pager.tsx";
-import { ClaudePage, DeckPage, HomePage, MusicPage, SystemPage, createFrameStats } from "./pages.tsx";
+import { DeckPage, HomePage, MusicPage, SystemPage, createFrameStats } from "./pages.tsx";
+import { AttentionLayer, ClaudePage, PermissionSheet } from "./claude.tsx";
+import { BoardPage, FocusPage, PulsePage } from "./views.tsx";
 import { CHARSET } from "./charset.ts";
-import { T, W } from "./theme.ts";
+import { T, W, accent } from "./theme.ts";
 
 // Glyph coverage for runtime text (song titles, Claude messages): the build
 // bakes every codepoint it sees in source literals.
 void CHARSET;
 
-const PAGES = ["home", "deck", "music", "claude", "system"] as const;
+const DEFAULT_PANES = ["home", "claude", "pulse", "deck", "music", "board", "focus", "system"];
+const KNOWN = new Set(DEFAULT_PANES);
 
-export default function Desk() {
-  useLink();
-  const { fps, gaps } = createFrameStats();
-  const pager = createPager(PAGES.length, W);
-  // A page animates only while it's on screen (or being swiped into view).
-  const on = (i: number) => () => pager.page() === i || pager.dragging();
+function Shell(props: { panes: string[]; fps: () => number; gaps: number[] }) {
+  const panes = props.panes;
+  const pager = createPager(panes.length, W);
+  const on_ = (i: number) => () => pager.page() === i || pager.dragging();
+  const claudeIdx = panes.indexOf("claude");
+  const waiting = () => (desk.claude?.counts?.waiting ?? 0) > 0;
+  // deskd (or the Studio's "show" button) can jump to a pane
+  createEffect(
+    on(
+      () => desk.nav?.seq,
+      (seq) => {
+        if (seq === undefined) return;
+        const i = panes.indexOf(desk.nav.pane);
+        if (i >= 0) pager.go(i);
+      },
+      { defer: true },
+    ),
+  );
+  const page = (id: string, i: number) => {
+    switch (id) {
+      case "home":
+        return <HomePage active={on_(i)} fps={props.fps} />;
+      case "deck":
+        return <DeckPage active={on_(i)} />;
+      case "music":
+        return <MusicPage active={on_(i)} />;
+      case "claude":
+        return <ClaudePage active={on_(i)} />;
+      case "pulse":
+        return <PulsePage active={on_(i)} />;
+      case "board":
+        return <BoardPage active={on_(i)} fps={props.fps} />;
+      case "focus":
+        return <FocusPage active={on_(i)} />;
+      default:
+        return <SystemPage active={on_(i)} fps={props.fps} gaps={props.gaps} />;
+    }
+  };
   return (
-    <View debugName="Desk" class={T.screen}>
+    <View class="w-full h-full flex-col">
       {/* the site's nav: a strip of cells divided by 1px rules; tap to jump */}
       <View class="h-[28] flex-row bg-[#222222] gap-[1]">
-        <For each={[...PAGES]}>
+        <For each={panes}>
           {(name, i) => (
             <View
-              class={pager.page() === i() ? "flex-1 h-full justify-center px-3 bg-[#141414]" : "flex-1 h-full justify-center px-3 bg-[#0a0a0a] active:bg-[#141414]"}
+              class={pager.page() === i() ? "flex-1 h-full justify-center items-center bg-[#141414]" : "flex-1 h-full justify-center items-center bg-[#0a0a0a] active:bg-[#141414]"}
               style={{ basis: 0 }}
               focusable
               onPress={() => pager.go(i())}
             >
-              <View class="flex-row items-center justify-between">
-                <Text class={pager.page() === i() ? "text-xs font-bold text-[#ffffff] tracking-wide" : "text-xs font-bold text-[#8a8a8a] tracking-wide"}>
-                  {name.toUpperCase()}
-                </Text>
-                <View class={pager.page() === i() ? "w-[5] h-[5] rounded-[1] bg-[#a8c7fa]" : "w-[5] h-[5] rounded-[1] border border-[#363636]"} />
-              </View>
+              <Text
+                class="text-xs font-bold tracking-wide"
+                style={{ textColor: name === "claude" && waiting() ? accent() : pager.page() === i() ? "#ffffff" : "#8a8a8a" }}
+              >
+                {name.toUpperCase()}
+              </Text>
+              <View class="absolute w-[16] h-[2] rounded-[1]" style={{ insetB: 0, bgColor: pager.page() === i() || (name === "claude" && waiting()) ? accent() : "#0a0a0a" }} />
             </View>
           )}
         </For>
       </View>
       <View class={T.rule} />
       <View class="flex-1 overflow-hidden">
+        {/* Each pane clips: the core's paint walk skips an overflow-hidden
+            subtree whose clip is empty, so off-screen panes cost nothing to
+            repaint (without this every repaint walked all panes' nodes). */}
         <pager.Track>
-          <HomePage active={on(0)} fps={fps} />
-          <DeckPage />
-          <MusicPage active={on(2)} />
-          <ClaudePage active={on(3)} />
-          <SystemPage active={on(4)} fps={fps} gaps={gaps} />
+          {panes.map((id, i) => (
+            <View class="h-full overflow-hidden" style={{ width: W }}>
+              {page(id, i)}
+            </View>
+          ))}
         </pager.Track>
       </View>
+      <AttentionLayer onOpen={() => claudeIdx >= 0 && pager.go(claudeIdx)} onClaude={() => pager.page() === claudeIdx} />
+      <PermissionSheet />
+    </View>
+  );
+}
+
+export default function Desk() {
+  useLink();
+  useDecorClock();
+  const { fps, gaps } = createFrameStats();
+  const key = createMemo(() => {
+    const list = ((desk.layout?.panes ?? DEFAULT_PANES) as string[]).filter((p) => KNOWN.has(p));
+    return (list.length ? list : DEFAULT_PANES).join(",");
+  });
+  return (
+    <View debugName="Desk" class={T.screen}>
+      <Show when={key()} keyed>
+        {(k) => <Shell panes={k.split(",")} fps={fps} gaps={gaps} />}
+      </Show>
     </View>
   );
 }

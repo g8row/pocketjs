@@ -30,3 +30,39 @@ export const T = {
 
 export const W = 512;
 export const H = 300;
+
+// ---- runtime theme (from deskd's `layout` state; set in the config UI) -------
+import { desk } from "./link.ts";
+
+export const DEFAULT_ACCENT = "#a8c7fa";
+/** The accent hex; use via style={{ bgColor: accent() }} / {{ textColor: … }}. */
+export const accent = (): string => desk.layout?.accent ?? DEFAULT_ACCENT;
+export const ON_ACCENT = "#0b1d33";
+export const TILE_HEX: Record<string, string> = {
+  blue: "#a8c7fa",
+  violet: "#d0bcff",
+  emerald: "#9ee6c3",
+  amber: "#ffd27a",
+  rose: "#ffb4a8",
+  zinc: "#8a8a8a",
+};
+
+/** Hard-wrap text into lines of ≤ cols chars (the core has no word wrap). */
+export function wrap(text: string, cols: number, maxLines: number): string {
+  const out: string[] = [];
+  for (const para of text.split(/\n+/)) {
+    let line = "";
+    for (const word of para.split(/\s+/)) {
+      if (!word) continue;
+      if (line.length + word.length + 1 > cols) {
+        if (line) out.push(line);
+        line = word.length > cols ? word.slice(0, cols - 1) + "…" : word;
+      } else line = line ? `${line} ${word}` : word;
+      if (out.length >= maxLines) break;
+    }
+    if (line && out.length < maxLines) out.push(line);
+    if (out.length >= maxLines) break;
+  }
+  if (out.length === maxLines && out[maxLines - 1]!.length > cols - 1) out[maxLines - 1] = out[maxLines - 1]!.slice(0, cols - 1) + "…";
+  return out.join("\n");
+}
