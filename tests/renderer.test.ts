@@ -292,6 +292,39 @@ describe("<For> reorder — DOM move semantics [R]", () => {
     dispose();
   });
 
+  test("swapping the ends (insertBefore(x, x) path) keeps the tree consistent", () => {
+    // Solid's reconcileArrays swap branch asks to insert a node before itself
+    // when two adjacent rows trade places; DOM treats that as "before its
+    // next sibling". Regression: this used to throw "insert anchor is not a
+    // child of parent" (seen live when two Claude sessions re-sorted).
+    const [items, setItems] = createSignal(["a", "b"]);
+    const byLabel = new Map<string, NodeMirror>();
+    const dispose = render(
+      () =>
+        comp(For, {
+          get each() {
+            return items();
+          },
+          children: (item: string) => {
+            const el = createElement("view");
+            byLabel.set(item, el);
+            return el;
+          },
+        }),
+      root,
+    );
+    const [a, b] = [byLabel.get("a")!, byLabel.get("b")!];
+    expect(() => setItems(["b", "a"])).not.toThrow();
+    expect(childIds(root)).toEqual([b.id, a.id]);
+    expect(() => setItems(["a", "b"])).not.toThrow();
+    expect(childIds(root)).toEqual([a.id, b.id]);
+    const four = ["w", "x", "y", "z"];
+    expect(() => setItems(four)).not.toThrow();
+    expect(() => setItems(["z", "x", "y", "w"])).not.toThrow();
+    expect(childIds(root)).toEqual(["z", "x", "y", "w"].map((k) => byLabel.get(k)!.id));
+    dispose();
+  });
+
   test("row removal detaches, then the frame-end sweep destroys", () => {
     const [items, setItems] = createSignal(["a", "b"]);
     const byLabel = new Map<string, NodeMirror>();
