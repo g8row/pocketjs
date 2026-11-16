@@ -36,7 +36,7 @@ use anyhow::{bail, Context, Result};
 use pocket_mod::Guest;
 use pocket_ui_surface::UiSurface;
 use pocketjs::link::Link;
-use pocketjs_core::damage::{DamagePlan, DamagePolicy, DamageRect, DamageTracker};
+use pocketjs_core::damage::{DamagePlan, DamagePolicy, DamageRect, DamageTarget, DamageTracker};
 use pocketjs_core::spec::{btn, ANALOG_CENTER};
 use pocketjs_core::{raster, Ui};
 
@@ -179,6 +179,13 @@ struct Fb {
     panned: bool,
     /// Rotated dirty region (BGRA u32), reused between frames.
     scratch: Vec<u32>,
+    /// Time spent in the last present's rotate and copy-out (POCKETJS_STATS=2).
+    last_rot: Duration,
+    last_copy: Duration,
+    /// Worker threads for large presents (POCKETJS_PRESENT_THREADS, default 2: memory-bound, 4 is no faster).
+    threads: usize,
+    /// Rotate straight into the framebuffer instead of scratch + row copies (POCKETJS_PRESENT_DIRECT).
+    direct: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -241,8 +248,14 @@ impl Fb {
             Ok(_) => true,
             Err(_) => flip || id.starts_with("mtkfb"),
         };
-        log::info!("{path}: id {id:?}, pan {pan}, flip {flip}");
-        Ok(Fb { _file: file, fd, mem: mem as *mut u8, len, var, stride, nbuf, front, history: Vec::new(), age: vec![None; nbuf], pan_worst: Duration::ZERO, flip, pan, panned: false, scratch: Vec::new() })
+        // Rotate straight into the buffer on DRM fbdev emulation (ordinary cached memory: 4.3 ms per full
+        // frame vs 5.7 via scratch + row copies); mtkfb's mapping is uncached, so keep scratch + memcpy there.
+        let direct = match std::env::var("POCKETJS_PRESENT_DIRECT").as_deref() {
+            Ok(v) => v == "1",
+            Err(_) => id.starts_with("mediatekdrmfb"),
+        };
+        log::info!("{path}: id {id:?}, pan {pan}, flip {flip}, direct {direct}");
+        Ok(Fb { _file: file, fd, mem: mem as *mut u8, len, var, stride, nbuf, front, history: Vec::new(), age: vec![None; nbuf], pan_worst: Duration::ZERO, flip, pan, panned: false, scratch: Vec::new(), last_rot: Duration::ZERO, last_copy: Duration::ZERO, threads: std::env::var("POCKETJS_PRESENT_THREADS").ok().and_then(|v| v.parse().ok()).unwrap_or(2).max(1), direct })
     }
 
     /// Write `dirty` (landscape render coords) from `rgba` (render_w × render_h,
@@ -285,7 +298,6 @@ impl Fb {
         // frame on the A53s at 988 MHz vs 15.8 ms tiled, 7.6 ms with NEON), then copy each panel row out with
         // one contiguous memcpy (mtkfb's mapping is uncached; scattered writes
         // to it are slow, and the DRM fbdev shadow doesn't mind either way).
-        const TILE: usize = 32;
         debug_assert_eq!((bo, go, ro), (0, 1, 2));
         let ly0 = r.y0.min(render_h).min(pw);
         let ly1 = r.y1.min(render_h).min(pw);
@@ -295,58 +307,61 @@ impl Fb {
             let px0 = pw - ly1; // leftmost panel column touched
             let span = ly1 - ly0;
             let rows = lx1 - lx0;
+            let t_rot = Instant::now();
             self.scratch.resize(rows * span, 0);
-            let src = rgba.as_ptr();
-            let scratch = self.scratch.as_mut_ptr();
-            // One pixel: RGBA bytes → BGRA bytes, opaque, into its rotated place.
-            let px = |lx: usize, ly: usize| {
-                // SAFETY: ly < render_h and lx < render_w (so the 4 bytes are inside `rgba`), and
-                // lx0 <= lx < lx1, ly0 <= ly < ly1 (so the index is inside `scratch`, rows × span).
-                unsafe {
-                    let p = u32::from_le(std::ptr::read_unaligned(src.add((ly * render_w + lx) * 4) as *const u32));
-                    *scratch.add((lx - lx0) * span + (ly1 - 1 - ly)) = 0xff00_0000 | (p & 0x0000_ff00) | ((p & 0xff) << 16) | ((p >> 16) & 0xff);
+            let src = SendPtr(rgba.as_ptr() as *mut u8);
+            let fbmem = SendPtr(self.mem);
+            let stride = self.stride;
+            // One band = panel rows lxa..lxb: rotate into its own scratch rows, then copy them out. Bands are
+            // disjoint in scratch and in fb, so they run on separate cores (4× A53; a full frame is memory-
+            // bound, ~7.6 + 1.9 ms on one core). Small damage stays on this thread.
+            let direct = self.direct;
+            let band = |lxa: usize, lxb: usize, out: &mut [u32]| {
+                if direct {
+                    // Straight into the framebuffer rows (it is cached/WC memory on mediatekdrmfb).
+                    // SAFETY: rows lxa..lxb < ph and columns px0..px0+span <= pw are inside buffer `back`;
+                    // the source rectangle is inside `rgba`.
+                    unsafe {
+                        let o = fbmem.get().add(base + lxa * stride + px0 * 4) as *mut u32;
+                        rotate_band(src.get(), render_w, ly0, ly1, lxa, lxb, o, stride / 4);
+                    }
+                    return;
+                }
+                // SAFETY: lx0 <= lxa < lxb <= lx1 <= render_w and ly0 < ly1 <= render_h (inside `rgba`); `out`
+                // holds exactly (lxb - lxa) × span pixels.
+                unsafe { rotate_band(src.get(), render_w, ly0, ly1, lxa, lxb, out.as_mut_ptr(), span) };
+                for (i, lx) in (lxa..lxb).enumerate() {
+                    let d = base + lx * stride + px0 * 4;
+                    // SAFETY: lx < ph rows and px0 + span <= pw columns, inside buffer `back`.
+                    unsafe { std::ptr::copy_nonoverlapping(out[i * span..].as_ptr() as *const u8, fbmem.get().add(d), span * 4) };
                 }
             };
-            for by in (ly0..ly1).step_by(TILE) {
-                let by1 = (by + TILE).min(ly1);
-                for bx in (lx0..lx1).step_by(TILE) {
-                    let bx1 = (bx + TILE).min(lx1);
-                    // Whole 4×4 blocks with NEON (7.6 ms for a full frame vs 15.8 ms scalar on the A53s),
-                    // the rest (a dirty rect's ragged edges) one pixel at a time.
-                    #[cfg(target_arch = "aarch64")]
-                    let (vy1, vx1) = {
-                        let vy1 = by + (by1 - by) / 4 * 4;
-                        let vx1 = bx + (bx1 - bx) / 4 * 4;
-                        for ly in (by..vy1).step_by(4) {
-                            for lx in (bx..vx1).step_by(4) {
-                                // SAFETY: rows ly..ly+4 < by1 <= render_h and columns lx..lx+4 < bx1 <= render_w
-                                // are inside `rgba`; the four output runs are inside `scratch` (see `px`).
-                                unsafe { rotate4x4(src, render_w, lx, ly, scratch.add((lx - lx0) * span + (ly1 - 4 - ly)), span) };
-                            }
+            let threads = if rows * span >= 64 * 1024 { self.threads } else { 1 };
+            if threads <= 1 {
+                band(lx0, lx1, &mut self.scratch[..]);
+            } else {
+                // Split on 4-row boundaries so the NEON blocks stay whole.
+                let per = (rows.div_ceil(threads) + 3) / 4 * 4;
+                std::thread::scope(|sc| {
+                    let mut rest = &mut self.scratch[..];
+                    let mut lxa = lx0;
+                    let band = &band;
+                    while lxa < lx1 {
+                        let lxb = (lxa + per).min(lx1);
+                        let (mine, tail) = rest.split_at_mut((lxb - lxa) * span);
+                        rest = tail;
+                        if lxb == lx1 {
+                            band(lxa, lxb, mine);
+                        } else {
+                            sc.spawn(move || band(lxa, lxb, mine));
                         }
-                        (vy1, vx1)
-                    };
-                    #[cfg(not(target_arch = "aarch64"))]
-                    let (vy1, vx1) = (by, bx);
-                    for ly in by..vy1 {
-                        for lx in vx1..bx1 {
-                            px(lx, ly);
-                        }
+                        lxa = lxb;
                     }
-                    for ly in vy1..by1 {
-                        for lx in bx..bx1 {
-                            px(lx, ly);
-                        }
-                    }
-                }
+                });
             }
-            for (i, lx) in (lx0..lx1).enumerate() {
-                let d = base + lx * self.stride + px0 * 4;
-                // SAFETY: lx < ph rows and px0 + span <= pw columns, inside buffer `back`.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(self.scratch[i * span..].as_ptr() as *const u8, self.mem.add(d), span * 4);
-                }
-            }
+            let t_copy = Instant::now();
+            self.last_rot += t_copy - t_rot;
+            self.last_copy += t_copy.elapsed();
         }
         let mut var = self.var;
         var.yoffset = (back * ph) as u32;
@@ -367,6 +382,67 @@ impl Fb {
         self.history.push(dirty);
         if self.history.len() > 8 {
             self.history.remove(0);
+        }
+    }
+}
+
+/// A raw pointer that may cross into scoped worker threads (each thread touches a disjoint range).
+#[derive(Clone, Copy)]
+struct SendPtr(*mut u8);
+// SAFETY: only used for disjoint per-band ranges inside `Fb::present`'s thread scope.
+unsafe impl Send for SendPtr {}
+unsafe impl Sync for SendPtr {}
+
+impl SendPtr {
+    /// Through a method, so closures capture the `Send` wrapper and not the raw field.
+    fn get(self) -> *mut u8 {
+        self.0
+    }
+}
+
+/// Rotate landscape RGBA columns `lxa..lxb` × rows `ly0..ly1` 90° clockwise into BGRA panel rows:
+/// panel row `lx` (at `out + (lx - lxa) * out_stride`, u32 units) gets pixel `(lx, ly)` at index `ly1 - 1 - ly`.
+/// Tiled for the cache, NEON 4×4 blocks where whole, one pixel at a time on the ragged edges.
+///
+/// # Safety
+/// The source rectangle must be inside `src` (row length `render_w` pixels) and `out` must hold
+/// `(lxb - lxa - 1) * out_stride + (ly1 - ly0)` pixels.
+#[allow(clippy::too_many_arguments)]
+unsafe fn rotate_band(src: *const u8, render_w: usize, ly0: usize, ly1: usize, lxa: usize, lxb: usize, out: *mut u32, out_stride: usize) {
+    const TILE: usize = 32;
+    let px = |lx: usize, ly: usize| unsafe {
+        let p = u32::from_le(std::ptr::read_unaligned(src.add((ly * render_w + lx) * 4) as *const u32));
+        *out.add((lx - lxa) * out_stride + (ly1 - 1 - ly)) = 0xff00_0000 | (p & 0x0000_ff00) | ((p & 0xff) << 16) | ((p >> 16) & 0xff);
+    };
+    for by in (ly0..ly1).step_by(TILE) {
+        let by1 = (by + TILE).min(ly1);
+        for bx in (lxa..lxb).step_by(TILE) {
+            let bx1 = (bx + TILE).min(lxb);
+            #[cfg(target_arch = "aarch64")]
+            let (vy1, vx1) = {
+                let vy1 = by + (by1 - by) / 4 * 4;
+                let vx1 = bx + (bx1 - bx) / 4 * 4;
+                for ly in (by..vy1).step_by(4) {
+                    for lx in (bx..vx1).step_by(4) {
+                        // SAFETY: the 4×4 block is inside the source rectangle; its four output runs are
+                        // inside `out` (rows lx..lx+4, columns ly1-4-ly..ly1-ly).
+                        unsafe { rotate4x4(src, render_w, lx, ly, out.add((lx - lxa) * out_stride + (ly1 - 4 - ly)), out_stride) };
+                    }
+                }
+                (vy1, vx1)
+            };
+            #[cfg(not(target_arch = "aarch64"))]
+            let (vy1, vx1) = (by, bx);
+            for ly in by..vy1 {
+                for lx in vx1..bx1 {
+                    px(lx, ly);
+                }
+            }
+            for ly in vy1..by1 {
+                for lx in bx..bx1 {
+                    px(lx, ly);
+                }
+            }
         }
     }
 }
@@ -702,15 +778,72 @@ fn hello(js: &[u8], pak: &[u8], vp: (u32, u32)) -> String {
     format!(r#"{{"t":"hello","host":"{HOST_ID}-kiosk","abi":{HOST_ABI},"bundle":"{h:08x}","viewport":[{},{}]}}"#, vp.0, vp.1)
 }
 
-fn rasterize(ui: &Ui, words: &[u32], rgba: &mut [u8], tracker: &mut DamageTracker, lw: i32, lh: i32) -> (DamagePlan, bool) {
-    match raster::render_scaled_incremental(ui, words, rgba, DENSITY, tracker, DamagePolicy::default()) {
-        Ok(plan) => (plan, false),
+/// `&Ui` for the raster worker threads. `Ui` is not `Sync` (a font-measurement miss counter is a `Cell`,
+/// and taffy's layout tree holds raw pointers), but the raster only calls the read-only accessors
+/// `viewport`, `font_atlas` and `texture`; nothing it reaches mutates, and the main thread is blocked in
+/// the scope until every band is done.
+#[derive(Clone, Copy)]
+struct RasterUi<'a>(&'a Ui);
+// SAFETY: see above — shared read-only use inside one `std::thread::scope` in `rasterize`.
+unsafe impl Send for RasterUi<'_> {}
+unsafe impl Sync for RasterUi<'_> {}
+
+impl<'a> RasterUi<'a> {
+    /// Through a method, so closures capture the wrapper and not the `&Ui` field.
+    fn get(self) -> &'a Ui {
+        self.0
+    }
+}
+
+/// Incremental raster like `raster::render_scaled_incremental`, but a large damage region (a page slide
+/// damages the whole screen every frame: 4-12 ms on one A53) is split into horizontal bands rendered on
+/// `threads` cores. Each band is a disjoint slice of `rgba`, and the core pixel-clips every op to it.
+fn rasterize(ui: &Ui, words: &[u32], rgba: &mut [u8], tracker: &mut DamageTracker, lw: i32, lh: i32, threads: usize) -> (DamagePlan, bool) {
+    let target = DamageTarget::new(lw as u32 * DENSITY, lh as u32 * DENSITY, DENSITY, raster::DAMAGE_SIGNATURE_RGBA8);
+    let plan = match tracker.prepare(ui, words, target).and_then(|p| p.with_policy(DamagePolicy::default())) {
+        Ok(plan) => plan,
         Err(_) => {
             raster::render_scaled(ui, words, rgba, DENSITY);
             tracker.invalidate();
-            (DamagePlan::full(DamageRect::new(0, 0, lw, lh)), true)
+            return (DamagePlan::full(DamageRect::new(0, 0, lw, lh)), true);
         }
+    };
+    let row_bytes = lw as usize * DENSITY as usize * 4;
+    let d = DENSITY as usize;
+    for &region in plan.regions() {
+        let region = region.intersect(DamageRect::new(0, 0, lw, lh));
+        if region.is_empty() {
+            continue;
+        }
+        let (y0, y1) = (region.y0 as usize, region.y1 as usize);
+        let area = (region.x1 - region.x0) as usize * (y1 - y0);
+        let n = if area >= 32 * 1024 { threads.min(y1 - y0) } else { 1 };
+        if n <= 1 {
+            let band = &mut rgba[y0 * d * row_bytes..y1 * d * row_bytes];
+            raster::render_scaled_region_band(ui, words, band, (y0 * d) as u32, DENSITY, region);
+            continue;
+        }
+        let per = (y1 - y0).div_ceil(n);
+        let shared = RasterUi(ui);
+        std::thread::scope(|sc| {
+            let mut rest = &mut rgba[y0 * d * row_bytes..y1 * d * row_bytes];
+            let mut ya = y0;
+            while ya < y1 {
+                let yb = (ya + per).min(y1);
+                let (mine, tail) = rest.split_at_mut((yb - ya) * d * row_bytes);
+                rest = tail;
+                let r = DamageRect::new(region.x0, ya as i32, region.x1, yb as i32);
+                if yb == y1 {
+                    raster::render_scaled_region_band(ui, words, mine, (ya * d) as u32, DENSITY, r);
+                } else {
+                    sc.spawn(move || raster::render_scaled_region_band(shared.get(), words, mine, (ya * d) as u32, DENSITY, r));
+                }
+                ya = yb;
+            }
+        });
     }
+    tracker.commit(ui, words, target);
+    (plan, false)
 }
 
 #[cfg(target_os = "android")]
@@ -816,6 +949,12 @@ fn main() -> Result<()> {
     // POCKETJS_STATS=1: one line per second (frames, average phases of the frames that drew) — for
     // measuring transitions, where the 300-frame summary hides how many frames actually made it.
     let sec_stats = std::env::var("POCKETJS_STATS").as_deref() == Ok("1");
+    // Raster worker threads for large damage (POCKETJS_RASTER_THREADS, default 4).
+    let raster_threads: usize = std::env::var("POCKETJS_RASTER_THREADS").ok().and_then(|v| v.parse().ok()).unwrap_or(4).max(1);
+    // POCKETJS_STATS=2: one line per frame (tick interval, damage, phases, present split rotate/copy).
+    let frame_trace = std::env::var("POCKETJS_STATS").as_deref() == Ok("2");
+    let trace_t0 = Instant::now();
+    let mut prev_t0 = Instant::now();
     let mut sec_t0 = Instant::now();
     let (mut sec_frames, mut sec_drawn) = (0u32, 0u32);
     let mut sec_ph = [0f64; 5];
@@ -889,7 +1028,7 @@ fn main() -> Result<()> {
         let (lw, lh) = (vp.0 as i32, vp.1 as i32);
         let plan = rt.surface.with_ui(|ui| {
             let words = ui.draw().words.clone();
-            rasterize(ui, &words, &mut rgba, &mut tracker, lw, lh)
+            rasterize(ui, &words, &mut rgba, &mut tracker, lw, lh, raster_threads)
         });
         let (plan, forced) = plan;
         let td = Instant::now();
@@ -909,6 +1048,22 @@ fn main() -> Result<()> {
         }
 
         let dt = t0.elapsed();
+        if frame_trace {
+            let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+            // Device pixels: regions summed vs their bounding box (what present writes).
+            let (area, bbox, rects) = if full || forced { ((rw * rh) as i64, (rw * rh) as i64, 1) } else if plan.is_empty() { (0, 0, 0) } else {
+                let a = |r: &pocketjs_core::damage::DamageRect| ((r.x1 - r.x0) as i64) * ((r.y1 - r.y0) as i64) * (DENSITY * DENSITY) as i64;
+                (plan.regions().iter().map(a).sum::<i64>(), a(&plan.bounds()), plan.regions().len())
+            };
+            eprintln!(
+                "f {:.1} gap {:.1} area {} bbox {bbox} rects {} js {:.1} core {:.1} raster {:.1} rot {:.1} copy {:.1} total {:.1}",
+                ms(t0 - trace_t0), ms(t0 - prev_t0), area, rects, ms(tb - ta), ms(tc - tb), ms(td - tc),
+                ms(fb.last_rot), ms(fb.last_copy), ms(dt)
+            );
+            fb.last_rot = Duration::ZERO;
+            fb.last_copy = Duration::ZERO;
+        }
+        prev_t0 = t0;
         if sec_stats {
             let ms = |d: Duration| d.as_secs_f64() * 1000.0;
             sec_frames += 1;

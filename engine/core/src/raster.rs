@@ -44,7 +44,9 @@ use crate::spec::{self, draw_op};
 use crate::{TexView, Ui};
 
 pub const MAX_RENDER_SCALE: u32 = 4;
-const DAMAGE_SIGNATURE_RGBA8: u64 = u32::from_be_bytes(*b"RGBA") as u64;
+/// [`DamageTarget`] signature of the RGBA8 incremental renderer, for hosts that drive
+/// [`DamageTracker::prepare`] / [`DamageTracker::commit`] themselves (see [`render_scaled_region_band`]).
+pub const DAMAGE_SIGNATURE_RGBA8: u64 = u32::from_be_bytes(*b"RGBA") as u64;
 const DAMAGE_SIGNATURE_ARGB8: u64 = u32::from_be_bytes(*b"ARGB") as u64;
 const DAMAGE_SIGNATURE_RGB565: u64 = u32::from_be_bytes(*b"R565") as u64;
 
@@ -472,6 +474,76 @@ pub fn render_scaled_rgb565_regions(
 ) {
     let mut target = Rgb565Target { pixels: fb };
     render_scaled_regions_impl(ui, words, &mut target, scale, regions);
+}
+
+/// An [`RgbaTarget`] over physical rows `base / width ..` of a full-screen RGBA8 framebuffer: offsets stay
+/// full-screen, the backing slice holds only the band.
+struct RgbaBandTarget<'a> {
+    inner: RgbaTarget<'a, false>,
+    base: usize,
+    full_len: usize,
+}
+
+impl RenderTarget for RgbaBandTarget<'_> {
+    #[inline]
+    fn pixel_len(&self) -> usize {
+        self.full_len
+    }
+
+    #[inline]
+    fn blend(&mut self, offset: usize, r: u32, g: u32, b: u32, a: u32) {
+        self.inner.blend(offset - self.base, r, g, b, a);
+    }
+
+    #[inline]
+    fn fill_opaque(&mut self, start: usize, len: usize, r: u32, g: u32, b: u32) {
+        self.inner.fill_opaque(start - self.base, len, r, g, b);
+    }
+}
+
+/// Clear and repaint logical damage `region`, limited to physical rows `band_y0 ..` (as many as `band`
+/// holds), into `band`: exactly those rows of the UI's scaled RGBA8 framebuffer.
+///
+/// Every op is pixel-clipped to the band, so disjoint bands of one region can be rendered concurrently
+/// (a host splits a large region across threads). Pair with [`DamageTracker::prepare`] /
+/// [`DamageTracker::commit`] and [`DAMAGE_SIGNATURE_RGBA8`] for incremental use.
+pub fn render_scaled_region_band(
+    ui: &Ui,
+    words: &[u32],
+    band: &mut [u8],
+    band_y0: u32,
+    scale: u32,
+    region: DamageRect,
+) {
+    assert!(
+        (1..=MAX_RENDER_SCALE).contains(&scale),
+        "render scale must be 1 through 4"
+    );
+    let (vw, vh) = ui.viewport();
+    let (width, height) = (vw as i32 * scale as i32, vh as i32 * scale as i32);
+    assert!(width > 0 && height > 0, "viewport must have positive dimensions");
+    assert_eq!(band.len() % (width as usize * 4), 0, "band must hold whole rows");
+    let rows = (band.len() / (width as usize * 4)) as i32;
+    let screen = Clip { x0: 0, y0: 0, x1: width, y1: height };
+    let band_clip = Clip { x0: 0, y0: band_y0 as i32, x1: width, y1: band_y0 as i32 + rows };
+    let region = region.intersect(DamageRect::new(0, 0, vw as i32, vh as i32));
+    if region.is_empty() {
+        return;
+    }
+    let s = scale as i32;
+    let physical = Clip { x0: region.x0 * s, y0: region.y0 * s, x1: region.x1 * s, y1: region.y1 * s }
+        .intersect(screen)
+        .intersect(band_clip);
+    if physical.x0 >= physical.x1 || physical.y0 >= physical.y1 {
+        return;
+    }
+    let mut target = RgbaBandTarget {
+        inner: RgbaTarget::<false> { bytes: band },
+        base: band_y0 as usize * width as usize,
+        full_len: width as usize * height as usize,
+    };
+    clear_black_rect(&mut target, width, physical);
+    render_scaled_clipped(ui, words, &mut target, width, s, physical);
 }
 
 /// Incrementally render RGBA8 using one tracker per persistent framebuffer.
@@ -1349,6 +1421,53 @@ mod tests {
         render(&ui, &words, &mut legacy);
         render_scaled(&ui, &words, &mut scaled, 1);
         assert_eq!(legacy, scaled);
+    }
+
+    #[test]
+    fn region_bands_compose_to_the_full_render() {
+        let ui = Ui::new();
+        let words = vec![
+            draw_op::RECT,
+            xy_word(0, 0),
+            wh_word(spec::SCREEN_W as u16, spec::SCREEN_H as u16),
+            0xff20_1008,
+            // Overlapping translucent rect across the band seams (blend reads dst).
+            draw_op::RECT,
+            xy_word(10, 20),
+            wh_word(200, 150),
+            0x8033_aa11,
+            draw_op::GRAD_RECT,
+            xy_word(40, 60),
+            wh_word(300, 90),
+            0xff00_0000,
+            0xffff_ffff,
+            spec::GradDir::ToRight as u32,
+            draw_op::TRI,
+            xy_word(100, 10),
+            xy_word(400, 250),
+            xy_word(20, 200),
+            0xc000_00ff,
+            0xc000_ff00,
+            0xc0ff_0000,
+        ];
+        let scale = 2;
+        let mut full = framebuffer(scale);
+        render_scaled(&ui, &words, &mut full, scale);
+        // Garbage first: band rendering must clear what it repaints.
+        let mut banded = vec![0x5a; full.len()];
+        let (w, h) = (spec::SCREEN_W as usize * scale as usize, spec::SCREEN_H as i32);
+        let row = w * 4;
+        // Uneven logical bands, including a 1-row one.
+        let cuts = [0, 37, 38, 150, h];
+        let mut rest = &mut banded[..];
+        for pair in cuts.windows(2) {
+            let (y0, y1) = (pair[0], pair[1]);
+            let (band, tail) = rest.split_at_mut((y1 - y0) as usize * scale as usize * row);
+            rest = tail;
+            let region = DamageRect::new(0, y0, spec::SCREEN_W as i32, y1);
+            render_scaled_region_band(&ui, &words, band, y0 as u32 * scale, scale, region);
+        }
+        assert!(full == banded, "banded render differs from the full render");
     }
 
     #[test]
