@@ -44,6 +44,7 @@ export const TILE_HEX: Record<string, string> = {
   emerald: "#9ee6c3",
   amber: "#ffd27a",
   rose: "#ffb4a8",
+  latte: "#f2c9a0",
   zinc: "#8a8a8a",
 };
 

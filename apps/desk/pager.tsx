@@ -10,6 +10,11 @@ import { onFrame } from "@pocketjs/framework/lifecycle";
 import { jump, spring } from "@pocketjs/framework/animation";
 import { cancelTouchTap, touches } from "@pocketjs/framework/input";
 
+/** Who owns the current touch gesture: "" (nobody yet), "pager" (a sideways
+ *  swipe) or "scroll" (a vertical drag in a Scroller). The first to claim it
+ *  keeps it until the finger lifts, so a scroll never turns into a swipe. */
+export const gesture = { owner: "" };
+
 export function createPager(count: number, width: number) {
   const [page, setPage] = createSignal(0);
   const [isDragging, setDragging] = createSignal(false);
@@ -40,8 +45,9 @@ export function createPager(count: number, width: number) {
       }
       const dx = t.x - start.x;
       const dy = t.y - start.y;
-      if (!dragging && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+      if (!dragging && gesture.owner === "" && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.2) {
         dragging = true;
+        gesture.owner = "pager";
         setDragging(true);
         cancelTouchTap();
       }
@@ -67,6 +73,7 @@ export function createPager(count: number, width: number) {
       go(p);
     }
     start = null;
+    gesture.owner = "";
     if (dragging) setDragging(false);
     dragging = false;
   });

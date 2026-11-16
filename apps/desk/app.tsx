@@ -9,7 +9,8 @@ import { Text, View } from "@pocketjs/framework/components";
 import { desk, useLink } from "./link.ts";
 import { useDecorClock } from "./clock.ts";
 import { createPager } from "./pager.tsx";
-import { DeckPage, HomePage, MusicPage, SystemPage, createFrameStats } from "./pages.tsx";
+import { HomePage, MusicPage, SystemPage, createFrameStats } from "./pages.tsx";
+import { DeckPage } from "./deck.tsx";
 import { AttentionLayer, ClaudePage, PermissionSheet } from "./claude.tsx";
 import { BoardPage, FocusPage, PulsePage } from "./views.tsx";
 import { CHARSET } from "./charset.ts";
@@ -97,7 +98,7 @@ function Shell(props: { panes: string[]; fps: () => number; gaps: number[] }) {
         </pager.Track>
       </View>
       <AttentionLayer onOpen={() => claudeIdx >= 0 && pager.go(claudeIdx)} onClaude={() => pager.page() === claudeIdx} />
-      <PermissionSheet />
+      <PermissionSheet onClaude={() => pager.page() === claudeIdx} onOpen={() => claudeIdx >= 0 && pager.go(claudeIdx)} />
     </View>
   );
 }

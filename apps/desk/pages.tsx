@@ -133,72 +133,7 @@ export function HomePage(props: { active: Active; fps: () => number }) {
   );
 }
 
-// ---- 2. deck: small project cards (tiles come from desk.config.json) -------------
-
-function Tile(props: { t: any; active: Active; compact: boolean }) {
-  let card: NodeMirror | undefined;
-  let mark: NodeMirror | undefined;
-  let a = Math.random() * 90;
-  onFrame(() => {
-    if (!props.active() || !mark || !decorFrame()) return;
-    a = (a + 0.5 * DECOR_STEP) % 360;
-    // a 9 px mark: 2° steps at 15 Hz look the same and repaint 4× less;
-    // all tiles step on the same global phase → one posted frame
-    if (decorPhase(4)) jump(mark, "rotate", a);
-  });
-  const press = () => {
-    if (card) {
-      jump(card, "scale", 0.93);
-      spring(card, "scale", 1);
-    }
-    act(props.t.id);
-  };
-  const hot = () => props.t.sub === "MUTED";
-  return (
-    <View
-      ref={(n: NodeMirror) => (card = n)}
-      class="flex-1 h-full flex-col justify-between rounded-[18] bg-gradient-to-b from-[#161616] to-[#101010] border border-[#222222] p-3 active:border-[#5a5a5a]"
-      style={{ basis: 0 }}
-      focusable
-      onPress={press}
-    >
-      <View class="flex-row items-center justify-between">
-        <Text class="text-base text-[#ededed]">{lower(clip(props.t.label, 12))}</Text>
-        <View ref={(n: NodeMirror) => (mark = n)} class="w-[9] h-[9] rounded-[3]" style={{ bgColor: TILE_HEX[props.t.color] ?? "#8a8a8a" }} />
-      </View>
-      <Show when={!props.compact}>
-        <Text class={T.monoSm}>{lower(clip(props.t.sub || props.t.kind || "action", 18))}</Text>
-      </Show>
-      <View class="flex-row">
-        <View class={hot() ? T.chipA : T.chipO}>
-          <Text class="text-xs font-bold" style={{ textColor: hot() ? accent() : "#8a8a8a" }}>
-            {props.compact ? lower(clip(props.t.sub || props.t.kind, 14)) : lower(props.t.kind ?? "action")}
-          </Text>
-        </View>
-      </View>
-    </View>
-  );
-}
-
-export function DeckPage(props: { active: Active }) {
-  const tiles = createMemo<any[]>(() => (desk.deck?.tiles ?? []).slice(0, 12));
-  const rows = createMemo(() => Math.max(1, Math.ceil(tiles().length / 3)));
-  const row = (i: number) => tiles().slice(i * 3, i * 3 + 3);
-  return (
-    <View class="h-full flex-col gap-2 p-3" style={{ width: 512 }}>
-      <For each={[0, 1, 2, 3]}>
-        {(r) => (
-          <Show when={r < rows()}>
-            <View class="flex-row gap-2 flex-1">
-              <For each={row(r)}>{(t) => <Tile t={t} active={props.active} compact={rows() > 2} />}</For>
-              <For each={Array.from({ length: 3 - row(r).length })}>{() => <View class="flex-1" style={{ basis: 0 }} />}</For>
-            </View>
-          </Show>
-        )}
-      </For>
-    </View>
-  );
-}
+// ---- 2. deck: see deck.tsx -------------------------------------------------------------
 
 // ---- 3. music: the centuryplay card + wave ----------------------------------------------
 
