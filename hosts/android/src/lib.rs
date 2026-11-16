@@ -25,3 +25,5 @@ mod host;
 mod input;
 #[cfg(target_os = "android")]
 mod present;
+#[cfg(all(target_os = "android", feature = "gpu"))]
+mod gpu;

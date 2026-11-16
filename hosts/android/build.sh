@@ -42,7 +42,7 @@ cp "$PAK" "$STAGE/assets/app.pak"
 echo "  $(basename "$JS") + $(basename "$PAK") ${APP_NAME:+($APP_NAME)}"
 
 echo "▸ host .so"
-(cd "$HERE" && cargo ndk -t arm64-v8a -P $API build --release)
+(cd "$HERE" && cargo ndk -t arm64-v8a -P $API build --release --lib ${CARGO_FEATURES:+--features $CARGO_FEATURES})
 cp "$HERE/target/aarch64-linux-android/release/libpocketjs.so" "$STAGE/lib/arm64-v8a/"
 
 echo "▸ apk"

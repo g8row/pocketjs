@@ -41,6 +41,16 @@ libc = "0.2"
 # rquickjs ships no pre-generated FFI bindings for Android targets; generate
 # them at build time (bindgen, needs libclang — the NDK's own is used, see
 # build.sh).
+# GPU presenter (wgpu GLES backend) — opt-in: `cargo ndk … --features gpu`.
+pocket-ui-wgpu = { path = "../../engine/crates/pocket-ui-wgpu", optional = true }
+pocket3d = { path = "../../engine/pocket3d/crates/pocket3d", optional = true }
+wgpu = { version = "25", optional = true, default-features = false, features = ["gles", "wgsl"] }
+raw-window-handle = { version = "0.6", optional = true }
+pollster = { version = "0.4", optional = true }
+
+[features]
+gpu = ["dep:pocket-ui-wgpu", "dep:pocket3d", "dep:wgpu", "dep:raw-window-handle", "dep:pollster"]
+
 [target.'cfg(target_os = "android")'.dependencies]
 rquickjs = { version = "0.12", features = ["bindgen"] }
 android-activity = { version = "0.6", features = ["native-activity"] }

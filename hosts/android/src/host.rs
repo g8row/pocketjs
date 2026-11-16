@@ -12,7 +12,40 @@ use pocket_ui_surface::UiSurface;
 
 use crate::geometry::Geometry;
 use crate::link;
-use crate::present::Presenter;
+use crate::present::Presenter as SoftPresenter;
+
+/// Software (damage-tracked raster → ANativeWindow) or, with the `gpu`
+/// feature and the runtime switch file, wgpu over GLES.
+enum Presenter {
+    Soft(SoftPresenter),
+    #[cfg(feature = "gpu")]
+    Gpu(crate::gpu::GpuPresenter, Vec<u32>),
+}
+
+impl Presenter {
+    fn invalidate(&mut self) {
+        match self {
+            Presenter::Soft(p) => p.invalidate(),
+            #[cfg(feature = "gpu")]
+            Presenter::Gpu(_, last) => last.clear(),
+        }
+    }
+
+    fn render(&mut self, ui: &pocketjs_core::Ui, words: &[u32]) -> Result<()> {
+        match self {
+            Presenter::Soft(p) => p.render(ui, words),
+            #[cfg(feature = "gpu")]
+            Presenter::Gpu(p, last) => {
+                let changed = last.as_slice() != words;
+                if changed {
+                    last.clear();
+                    last.extend_from_slice(words);
+                }
+                p.render(ui, words, changed)
+            }
+        }
+    }
+}
 use crate::input;
 
 /// Host platform-contract identity. Must match `android.hostAbi` in
@@ -115,7 +148,14 @@ fn make_presenter(win: ndk::native_window::NativeWindow, viewport: (u32, u32), i
     );
     log::info!("window {}x{} → {:?}", win.width(), win.height(), geo);
     input.set_geometry(geo);
-    Presenter::new(win, geo)
+    #[cfg(feature = "gpu")]
+    if crate::gpu::enabled() {
+        match crate::gpu::GpuPresenter::new(win.clone(), geo) {
+            Ok(p) => return Presenter::Gpu(p, Vec::new()),
+            Err(e) => log::error!("gpu presenter failed, falling back to software: {e:#}"),
+        }
+    }
+    Presenter::Soft(SoftPresenter::new(win, geo))
 }
 
 /// Persist a bundle pushed over the link so it survives restarts.
@@ -155,6 +195,9 @@ fn run(app: AndroidApp) -> Result<()> {
         app.poll_events(Some(timeout), |event| match event {
             PollEvent::Main(MainEvent::InitWindow { .. }) => {
                 if let Some(win) = app.native_window() {
+                    // Drop the old presenter first: a GPU presenter owns the window's
+                    // EGL surface and a second one on the same window is illegal.
+                    presenter = None;
                     presenter = Some(make_presenter(win, rt.viewport, &mut input));
                 }
             }
@@ -199,7 +242,10 @@ fn run(app: AndroidApp) -> Result<()> {
                 Ok(new_rt) => {
                     rt = new_rt;
                     if let Some(win) = app.native_window() {
-                        presenter = Some(make_presenter(win, rt.viewport, &mut input));
+                        // Drop the old presenter first: a GPU presenter owns the window's
+                    // EGL surface and a second one on the same window is illegal.
+                    presenter = None;
+                    presenter = Some(make_presenter(win, rt.viewport, &mut input));
                     }
                     link.send(r#"{"t":"reloaded","ok":true}"#);
                 }
