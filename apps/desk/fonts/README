@@ -1,0 +1,2 @@
+regular.ttf = Geist Regular, bold.ttf = Geist Mono Regular (v1.9.2, vercel/geist-font, SIL OFL 1.1 — see OFL.txt).
+The Desk app uses the "bold" slot as its monospace face (eyebrows, numbers, ASCII field).

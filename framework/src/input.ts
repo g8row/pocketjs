@@ -760,6 +760,16 @@ let touchId = -1;
 let touchArmed: NodeMirror | null = null;
 let touchLast: { x: number; y: number } | null = null;
 
+/**
+ * Disarm the current touch so lifting the finger fires nothing — for gesture
+ * owners (a swipe pager) that claim a contact mid-press. The contact stays
+ * consumed until it lifts. Call from onFrame (runs before input handling).
+ */
+export function cancelTouchTap(): void {
+  touchArmed = null;
+  setPressedNode(null);
+}
+
 /** Returns true when touch consumed this frame (classic input skips). */
 function touchFrame(): boolean {
   const list = touches();

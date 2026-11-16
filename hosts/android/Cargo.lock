@@ -45,6 +45,7 @@ dependencies = [
  "anyhow",
  "base64",
  "cc",
+ "libc",
  "log",
  "ndk",
  "ndk-sys",

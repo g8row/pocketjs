@@ -16,8 +16,8 @@
 //! logical px; default 480 272). A bundle pushed over the link hot-reloads the
 //! runtime in place — no reinstall, no activity restart.
 
-mod geometry;
-mod link;
+pub mod geometry;
+pub mod link;
 
 #[cfg(target_os = "android")]
 mod host;
