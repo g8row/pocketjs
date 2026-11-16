@@ -182,6 +182,15 @@ const targetBackends = {
         `(hosts/pocketbook, cargo zigbuild) and copy both to the device.`,
     );
   },
+  android: async ({ outdir }) => {
+    // hosts/android loads app.js + app.pak from the APK assets (or the
+    // /data/local/tmp/pocketjs dev override), so compile already produced
+    // everything; hosts/android/build.sh packages the APK.
+    console.log(
+      `✓ Android bundle ready in ${outdir} — run hosts/android/build.sh to ` +
+        `package the APK (or adb push to /data/local/tmp/pocketjs/).`,
+    );
+  },
 } satisfies Record<PocketTargetId, TargetBackend>;
 
 await targetBackends[target as PocketTargetId]({

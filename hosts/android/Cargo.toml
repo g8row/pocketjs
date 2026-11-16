@@ -1,0 +1,50 @@
+# android-host — the PocketJS UI runtime as a native Android activity.
+#
+# STANDALONE LONE-BIN CRATE (same model as hosts/pocketbook): outside any
+# workspace, with path dependencies on the engine crates. It reuses the
+# backend-agnostic `ui` surface (pocket-ui-surface) and the core's incremental
+# software rasterizer, then copies only the damaged rows straight into the
+# ANativeWindow buffer (RGBA8888, 1:1, no scaling when the 960×544 render fits).
+#
+# No Java/Kotlin: NativeActivity + android-activity. See README.md for the
+# APK packaging (build.sh) and target profile.
+
+[package]
+name = "android-host"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "PocketJS UI runtime host for Android (NativeActivity, software raster to ANativeWindow)"
+
+[lib]
+name = "pocketjs"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+pocketjs-core = { path = "../../engine/core", features = ["std"] }
+pocket-mod = { path = "../../engine/crates/pocket-mod" }
+pocket-ui-surface = { path = "../../engine/crates/pocket-ui-surface" }
+
+android-activity = { version = "0.6", features = ["native-activity"] }
+ndk = "0.9"
+ndk-sys = "0.6"
+android_logger = "0.14"
+anyhow = "1"
+log = "0.4"
+
+# rquickjs ships no pre-generated FFI bindings for Android targets; generate
+# them at build time (bindgen, needs libclang — the NDK's own is used, see
+# build.sh).
+[target.'cfg(target_os = "android")'.dependencies]
+rquickjs = { version = "0.12", features = ["bindgen"] }
+
+[build-dependencies]
+cc = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

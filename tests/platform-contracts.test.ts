@@ -141,7 +141,7 @@ describe("pocket.json v2 schema", () => {
 
 describe("platform registry", () => {
   test("production advertises only the truthful stock-host profiles", () => {
-    expect(Object.keys(POCKET_TARGETS)).toEqual(["psp", "vita", "switch", "pocketbook", "macos-widget"]);
+    expect(Object.keys(POCKET_TARGETS)).toEqual(["psp", "vita", "switch", "pocketbook", "android", "macos-widget"]);
     expect(validatePlatformContractRegistry(POCKET_PLATFORM_CONTRACTS)).toEqual([]);
     expect(POCKET_TARGETS.psp.capabilities).toEqual([
       "input.analog.left",

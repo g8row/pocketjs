@@ -164,6 +164,7 @@ export const POCKET_TARGETS = defineTargetRegistry<PocketCapabilityId, {
   readonly vita: TargetProfile<PocketCapabilityId>;
   readonly switch: TargetProfile<PocketCapabilityId>;
   readonly pocketbook: TargetProfile<PocketCapabilityId>;
+  readonly android: TargetProfile<PocketCapabilityId>;
   readonly "macos-widget": TargetProfile<PocketCapabilityId>;
 }>({
   psp: {
@@ -232,6 +233,24 @@ export const POCKET_TARGETS = defineTargetRegistry<PocketCapabilityId, {
   pocketbook: {
     hostAbi: 5,
     platform: "pocketbook",
+    form: "takeover",
+    display: {
+      physicalViewport: [960, 544],
+      logicalViewports: [[480, 272]],
+      presentations: ["integer-fit"],
+      rasterDensity: 2,
+    },
+    capabilities: ["input.buttons", "input.touch", "text.glyphs.baked"],
+  },
+  // Android tablets/phones (NativeActivity, no Java): hosts/android reuses the
+  // backend-agnostic ui surface + the core incremental software rasterizer and
+  // copies only damaged rows into the ANativeWindow buffer. Same nominal 2x
+  // surface as vita/pocketbook; the host centers the 960×544 render 1:1 when
+  // the window fits (e.g. 1024×600 landscape) and scales to fit otherwise.
+  // Real multi-touch; volume/back/gamepad keys map to buttons.
+  android: {
+    hostAbi: 6,
+    platform: "android",
     form: "takeover",
     display: {
       physicalViewport: [960, 544],
