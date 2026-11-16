@@ -40,6 +40,8 @@ use pocketjs_core::damage::{DamagePlan, DamagePolicy, DamageRect, DamageTarget, 
 use pocketjs_core::spec::{btn, ANALOG_CENTER};
 use pocketjs_core::{raster, Ui};
 
+mod kiosk_drm;
+
 const HOST_ID: &str = "android";
 /// Bundle directory when argv[1] is not given.
 #[cfg(target_os = "android")]
@@ -158,7 +160,7 @@ const KEY_POWER: u16 = 116;
 // ---- framebuffer --------------------------------------------------------------------
 
 struct Fb {
-    _file: File,
+    _file: Option<File>,
     fd: i32,
     mem: *mut u8,
     len: usize,
@@ -186,6 +188,8 @@ struct Fb {
     threads: usize,
     /// Rotate straight into the framebuffer instead of scratch + row copies (POCKETJS_PRESENT_DIRECT).
     direct: bool,
+    /// KMS scanout (two dumb buffers, page flips at vblank) instead of fbdev; `mem`/`len` are unused then.
+    drm: Option<kiosk_drm::Drm>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -203,7 +207,51 @@ impl Rect {
 }
 
 impl Fb {
+    /// DRM/KMS when available (POCKETJS_DISPLAY=drm|fb; default drm, falling back to fbdev on any error).
     fn open() -> Result<Fb> {
+        let display = std::env::var("POCKETJS_DISPLAY").unwrap_or_else(|_| "drm".into());
+        if display != "fb" && !cfg!(target_os = "android") {
+            match kiosk_drm::Drm::open(std::env::var("POCKETJS_DRM").ok().as_deref()) {
+                Ok(d) => return Ok(Self::with_drm(d)),
+                Err(e) => log::warn!("drm unavailable ({e:#}); using fbdev"),
+            }
+        }
+        Self::open_fbdev()
+    }
+
+    fn with_drm(d: kiosk_drm::Drm) -> Fb {
+        let mut var = FbVar::default();
+        var.xres = d.width as u32;
+        var.yres = d.height as u32;
+        let nbuf = d.buffers();
+        // Dumb buffers are write-combined: rotate into cached scratch and copy whole rows out unless told otherwise.
+        let direct = std::env::var("POCKETJS_PRESENT_DIRECT").as_deref() == Ok("1");
+        log::info!("display: drm, {nbuf} buffers, page flip at vblank, direct {direct}");
+        Fb {
+            _file: None,
+            fd: -1,
+            mem: std::ptr::null_mut(),
+            len: 0,
+            var,
+            stride: d.pitch,
+            nbuf,
+            front: 0,
+            history: Vec::new(),
+            age: vec![None; nbuf],
+            pan_worst: Duration::ZERO,
+            flip: true,
+            pan: false,
+            panned: false,
+            scratch: Vec::new(),
+            last_rot: Duration::ZERO,
+            last_copy: Duration::ZERO,
+            threads: std::env::var("POCKETJS_PRESENT_THREADS").ok().and_then(|v| v.parse().ok()).unwrap_or(2).max(1),
+            direct,
+            drm: Some(d),
+        }
+    }
+
+    fn open_fbdev() -> Result<Fb> {
         let paths: Vec<String> = match std::env::var("POCKETJS_FB") {
             Ok(p) => vec![p],
             Err(_) => FB_PATHS.iter().map(|p| p.to_string()).collect(),
@@ -255,7 +303,7 @@ impl Fb {
             Err(_) => id.starts_with("mediatekdrmfb"),
         };
         log::info!("{path}: id {id:?}, pan {pan}, flip {flip}, direct {direct}");
-        Ok(Fb { _file: file, fd, mem: mem as *mut u8, len, var, stride, nbuf, front, history: Vec::new(), age: vec![None; nbuf], pan_worst: Duration::ZERO, flip, pan, panned: false, scratch: Vec::new(), last_rot: Duration::ZERO, last_copy: Duration::ZERO, threads: std::env::var("POCKETJS_PRESENT_THREADS").ok().and_then(|v| v.parse().ok()).unwrap_or(2).max(1), direct })
+        Ok(Fb { _file: Some(file), fd, mem: mem as *mut u8, len, var, stride, nbuf, front, history: Vec::new(), age: vec![None; nbuf], pan_worst: Duration::ZERO, flip, pan, panned: false, scratch: Vec::new(), last_rot: Duration::ZERO, last_copy: Duration::ZERO, threads: std::env::var("POCKETJS_PRESENT_THREADS").ok().and_then(|v| v.parse().ok()).unwrap_or(2).max(1), direct, drm: None })
     }
 
     /// Write `dirty` (landscape render coords) from `rgba` (render_w × render_h,
@@ -267,7 +315,12 @@ impl Fb {
         // FBIOPAN_DISPLAY to the SAME offset — mtkfb only re-reads memory into
         // the display engine on a pan (verified on device: without it the panel
         // keeps the first frame). POCKETJS_KIOSK_FLIP=1 = triple-buffered flips.
-        let back = if self.flip { (self.front + 1) % self.nbuf } else { self.front };
+        let back = match self.drm.as_mut() {
+            // Waits for the previous flip, so this buffer is no longer being scanned out.
+            Some(d) => d.back(),
+            None if self.flip => (self.front + 1) % self.nbuf,
+            None => self.front,
+        };
         // What this back buffer is missing: everything newer than its contents.
         let age = if self.flip { self.age[back] } else if self.panned { Some(1) } else { None };
         let need = match (dirty, age) {
@@ -288,7 +341,11 @@ impl Fb {
         };
         let r = need.unwrap();
         let (pw, ph) = (self.var.xres as usize, self.var.yres as usize);
-        let base = back * ph * self.stride;
+        // Buffer `back`: its own dumb buffer under DRM, else a slice of the one fbdev mapping.
+        let (bufmem, base) = match self.drm.as_ref() {
+            Some(d) => (d.mem(back), 0),
+            None => (self.mem, back * ph * self.stride),
+        };
         // mtkfb advertises RGBA offsets, but the display engine scans BGRA
         // (verified against an Android-composited capture) — so write BGRA.
         let (bo, go, ro) = (0u32, 1u32, 2u32);
@@ -310,7 +367,7 @@ impl Fb {
             let t_rot = Instant::now();
             self.scratch.resize(rows * span, 0);
             let src = SendPtr(rgba.as_ptr() as *mut u8);
-            let fbmem = SendPtr(self.mem);
+            let fbmem = SendPtr(bufmem);
             let stride = self.stride;
             // One band = panel rows lxa..lxb: rotate into its own scratch rows, then copy them out. Bands are
             // disjoint in scratch and in fb, so they run on separate cores (4× A53; a full frame is memory-
@@ -362,6 +419,13 @@ impl Fb {
             let t_copy = Instant::now();
             self.last_rot += t_copy - t_rot;
             self.last_copy += t_copy.elapsed();
+        }
+        if let Some(d) = self.drm.as_mut() {
+            let tp = Instant::now();
+            if let Err(e) = d.show(back) {
+                log::error!("drm: {e:#}");
+            }
+            self.pan_worst = self.pan_worst.max(tp.elapsed());
         }
         let mut var = self.var;
         var.yoffset = (back * ph) as u32;
@@ -480,8 +544,10 @@ unsafe fn rotate4x4(src: *const u8, render_w: usize, lx: usize, ly: usize, dst: 
 
 impl Drop for Fb {
     fn drop(&mut self) {
-        unsafe {
-            libc::munmap(self.mem as *mut _, self.len);
+        if self.len > 0 {
+            unsafe {
+                libc::munmap(self.mem as *mut _, self.len);
+            }
         }
     }
 }
@@ -916,12 +982,21 @@ extern "C" fn on_signal(_: libc::c_int) {
     STOP.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// SIGUSR1: write the frame on screen to /tmp/pocketjs-front.raw (tight 600x1024 BGRX; the fbdev dump cannot
+/// see a DRM framebuffer). Convert with mainline/scripts/fb2png.py.
+static DUMP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn on_dump(_: libc::c_int) {
+    DUMP.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 fn main() -> Result<()> {
     init_log();
     // SIGTERM/SIGINT end the loop normally so the VT is restored.
     unsafe {
         libc::signal(libc::SIGTERM, on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t);
         libc::signal(libc::SIGINT, on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t);
+        libc::signal(libc::SIGUSR1, on_dump as extern "C" fn(libc::c_int) as libc::sighandler_t);
     }
     let dir = std::env::args().nth(1).unwrap_or_else(|| DEFAULT_DIR.into());
     let (mut js, mut pak, mut vp) = load(&dir)?;
@@ -1048,6 +1123,14 @@ fn main() -> Result<()> {
         }
 
         let dt = t0.elapsed();
+        if DUMP.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            if let Some(d) = fb.drm.as_ref() {
+                match d.dump_front("/tmp/pocketjs-front.raw") {
+                    Ok(()) => log::info!("dumped the front buffer to /tmp/pocketjs-front.raw"),
+                    Err(e) => log::warn!("dump: {e:#}"),
+                }
+            }
+        }
         if frame_trace {
             let ms = |d: Duration| d.as_secs_f64() * 1000.0;
             // Device pixels: regions summed vs their bounding box (what present writes).
@@ -1055,8 +1138,16 @@ fn main() -> Result<()> {
                 let a = |r: &pocketjs_core::damage::DamageRect| ((r.x1 - r.x0) as i64) * ((r.y1 - r.y0) as i64) * (DENSITY * DENSITY) as i64;
                 (plan.regions().iter().map(a).sum::<i64>(), a(&plan.bounds()), plan.regions().len())
             };
+            let (wait, vgap, vseq) = match fb.drm.as_mut() {
+                Some(d) => {
+                    let r = (ms(d.last_wait), d.flip_gap.take().unwrap_or(0.0), d.last_flip.map(|f| f.1).unwrap_or(0));
+                    d.last_wait = Duration::ZERO;
+                    r
+                }
+                None => (0.0, 0.0, 0),
+            };
             eprintln!(
-                "f {:.1} gap {:.1} area {} bbox {bbox} rects {} js {:.1} core {:.1} raster {:.1} rot {:.1} copy {:.1} total {:.1}",
+                "f {:.1} gap {:.1} area {} bbox {bbox} rects {} js {:.1} core {:.1} raster {:.1} wait {wait:.1} rot {:.1} copy {:.1} total {:.1} vgap {vgap:.1} vseq {vseq}",
                 ms(t0 - trace_t0), ms(t0 - prev_t0), area, rects, ms(tb - ta), ms(tc - tb), ms(td - tc),
                 ms(fb.last_rot), ms(fb.last_copy), ms(dt)
             );
