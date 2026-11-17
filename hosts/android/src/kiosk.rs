@@ -67,6 +67,14 @@ const HOST_ABI: u32 = 6;
 const DENSITY: u32 = 2;
 const TICK: Duration = Duration::from_nanos(16_666_667);
 
+/// CLOCK_MONOTONIC in ms (the clock DRM event timestamps use).
+fn monotonic_ms() -> f64 {
+    let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: valid out-pointer.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut t) };
+    t.tv_sec as f64 * 1000.0 + t.tv_nsec as f64 / 1e6
+}
+
 // ---- linux fbdev / evdev FFI ------------------------------------------------------
 
 #[repr(C)]
@@ -1232,11 +1240,43 @@ fn main() -> Result<()> {
     let mut sec_t0 = Instant::now();
     let (mut sec_frames, mut sec_drawn) = (0u32, 0u32);
     let mut sec_ph = [0f64; 5];
+    // Vblank phase lock: on a ~60 Hz KMS display the 60 Hz tick is kept in a fixed phase to the flip-complete
+    // events: each frame starts POCKETJS_PHASE_MS (default 8) after a vblank. JS and raster then run while the
+    // previous flip is still pending (they don't touch the dumb buffers) and the rotate waits at most until
+    // that vblank, so a frame has ~16.7 + 8 ms before it misses its refresh. Without the lock the timer drifts
+    // against the panel and its phase wanders through bad spots. Off on other refresh rates (the virtual
+    // clock is a fixed 60 Hz; a 66 Hz mode would show it unevenly either way) and with POCKETJS_PACE=timer.
+    let vblank_lock = match fb.drm.as_ref() {
+        Some(d) if std::env::var("POCKETJS_PACE").as_deref() != Ok("timer") => {
+            let hz = d.refresh_hz();
+            let ok = (hz - 60.0).abs() < 0.5;
+            log::info!("pacing: {} (display {hz:.2} Hz)", if ok { "60 Hz tick locked to vblank" } else { "free 60 Hz tick" });
+            ok
+        }
+        _ => false,
+    };
+    let phase_ms: f64 = std::env::var("POCKETJS_PHASE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(8.0);
+    let mut locked_seq = 0u32;
 
     loop {
         if STOP.load(std::sync::atomic::Ordering::Relaxed) {
             eprintln!("pocketjs-kiosk: signal → exit");
             return Ok(());
+        }
+        if vblank_lock {
+            // A new flip-complete event: move `next` so it sits phase_ms after a vblank (by at most half a tick).
+            if let Some((ts, seq)) = fb.drm.as_ref().and_then(|d| d.last_flip) {
+                if seq != locked_seq {
+                    locked_seq = seq;
+                    let now = Instant::now();
+                    let period = TICK.as_secs_f64() * 1000.0;
+                    let ahead = if next > now { (next - now).as_secs_f64() * 1000.0 } else { -((now - next).as_secs_f64() * 1000.0) };
+                    // DRM event timestamps are CLOCK_MONOTONIC, like Instant.
+                    let err = (monotonic_ms() - ts + ahead - phase_ms + period / 2.0).rem_euclid(period) - period / 2.0;
+                    let shift = Duration::from_secs_f64(err.abs() / 1000.0);
+                    next = if err > 0.0 { next - shift } else { next + shift };
+                }
+            }
         }
         let now = Instant::now();
         if now < next {

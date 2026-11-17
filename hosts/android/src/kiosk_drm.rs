@@ -345,6 +345,12 @@ impl Drm {
         Ok(Buffer { handle: c.handle, fb_id: f.fb_id, mem: mem as *mut u8, size })
     }
 
+    /// Refresh rate of the mode, from its timings (more precise than the integer `vrefresh`).
+    pub fn refresh_hz(&self) -> f64 {
+        let m = &self.mode;
+        m.clock as f64 * 1000.0 / (m.htotal as f64 * m.vtotal as f64)
+    }
+
     pub fn buffers(&self) -> usize {
         self.bufs.len()
     }
