@@ -21,6 +21,18 @@
 //! Overrides (env): POCKETJS_FB=/dev/fbN, POCKETJS_TOUCH=<evdev name or path>,
 //! POCKETJS_KEYS=<names/paths, comma separated>, POCKETJS_KIOSK_PAN=0|1,
 //! POCKETJS_TOUCH_XFORM=[s][x][y] (swap / invert panel axes),
+//! POCKETJS_TOUCH_MASK="x0,y0,x1,y1;..." (raw panel pixels, inclusive: a contact
+//! that STARTS inside one of these rects is dropped for its whole life — for a
+//! cracked panel that reports phantom contacts at fixed spots; a real finger that
+//! starts elsewhere and slides through the area is unaffected),
+//! POCKETJS_TOUCH_LEARN=1 (learn phantom spots: the panel is cut into 40 px
+//! cells; every contact that barely moves bumps a decaying score (60 s) in the
+//! cell it started in; contacts starting in a cell whose score reached 10 are
+//! dropped until it decays below 2 — phantom contacts repeat in the same cells
+//! many times a minute, a person's taps do not),
+//! POCKETJS_TOUCH_STALE_MS=<ms> (a contact that stays within ~20 panel px for
+//! longer than this is hidden until it lifts: a stuck phantom contact or a resting
+//! thumb would otherwise own the primary touch forever; 0/unset = off),
 //! POCKETJS_POWER=exit|ignore, POCKETJS_KIOSK_VT=0 (leave the VT alone),
 //! POCKETJS_LINK=host:port. Bundle dir: argv[1].
 //!
@@ -563,6 +575,33 @@ fn resolve_event(spec: &str) -> Option<String> {
     }
 }
 
+/// A contact that moves less than this (raw panel px, either axis) counts as held still (stale retirement) or
+/// as a phantom candidate (learning).
+const STALE_RADIUS: i32 = 20;
+/// Phantom learning: cell size (raw panel px), score time constant, mask/unmask thresholds.
+const CELL: i32 = 40;
+const LEARN_TAU_S: f32 = 60.0;
+const LEARN_ENTER: f32 = 10.0;
+const LEARN_EXIT: f32 = 2.0;
+
+/// "x0,y0,x1,y1;x0,y0,x1,y1" → rects; malformed entries are skipped with a warning.
+fn parse_mask(spec: &str) -> Vec<[i32; 4]> {
+    spec.split(';')
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .filter_map(|r| {
+            let v: Vec<i32> = r.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+            match v[..] {
+                [x0, y0, x1, y1] => Some([x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)]),
+                _ => {
+                    log::warn!("POCKETJS_TOUCH_MASK: ignoring {r:?} (want x0,y0,x1,y1)");
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
 fn find_event(name: &str) -> Option<String> {
     let devices = std::fs::read_to_string("/proc/bus/input/devices").ok()?;
     let mut cur_name = false;
@@ -628,6 +667,25 @@ struct Touch {
     single: Option<(i32, i32)>,   // ABS_X/Y fallback
     btn: bool,
     proto_a: bool,
+    /// POCKETJS_TOUCH_MASK rects (raw panel pixels, inclusive).
+    mask: Vec<[i32; 4]>,
+    /// Per slot: contact began since the last SYN_REPORT (not classified yet), and contact is masked.
+    fresh: [bool; 10],
+    masked: [bool; 10],
+    /// Stale-contact retirement: per slot, where the contact last moved >= STALE_RADIUS, and since when.
+    stale_after: Option<Duration>,
+    anchor: [(i32, i32, Instant); 10],
+    retired: [bool; 10],
+    /// Learned phantom cells (POCKETJS_TOUCH_LEARN): per cell (score, last update, hot).
+    learn: bool,
+    cols: i32,
+    cells: Vec<(f32, Instant, bool)>,
+    /// Per slot: (start x, start y, min x, min y, max x, max y, start time) of the live contact.
+    track: [(i32, i32, i32, i32, i32, i32, Instant); 10],
+    /// Contacts dropped by the mask since the last log line.
+    dropped: u32,
+    retired_n: u32,
+    dropped_log: Instant,
     /// POCKETJS_TOUCH_XFORM: swap axes, then invert x / y (normalized panel space).
     swap: bool,
     inv_x: bool,
@@ -652,7 +710,16 @@ impl Touch {
             yr = abs_range(&file, ABS_Y);
         }
         let xform = std::env::var("POCKETJS_TOUCH_XFORM").unwrap_or_default();
-        log::info!("touch {path}: x {:?} y {:?} xform {xform:?}", xr, yr);
+        let mask = parse_mask(&std::env::var("POCKETJS_TOUCH_MASK").unwrap_or_default());
+        let stale_after = std::env::var("POCKETJS_TOUCH_STALE_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|&ms| ms > 0)
+            .map(Duration::from_millis);
+        let learn = std::env::var("POCKETJS_TOUCH_LEARN").as_deref() == Ok("1");
+        let cols = (xr.1 - xr.0) / CELL + 1;
+        let rows = (yr.1 - yr.0) / CELL + 1;
+        log::info!("touch {path}: x {:?} y {:?} xform {xform:?} mask {mask:?} stale {stale_after:?} learn {learn}", xr, yr);
         Ok(Touch {
             file,
             xr,
@@ -664,6 +731,19 @@ impl Touch {
             single: None,
             btn: false,
             proto_a: false,
+            mask,
+            fresh: [false; 10],
+            masked: [false; 10],
+            learn,
+            cols,
+            cells: vec![(0.0, Instant::now(), false); (cols * rows) as usize],
+            track: [(0, 0, 0, 0, 0, 0, Instant::now()); 10],
+            stale_after,
+            anchor: [(0, 0, Instant::now()); 10],
+            retired: [false; 10],
+            dropped: 0,
+            retired_n: 0,
+            dropped_log: Instant::now(),
             swap: xform.contains('s'),
             inv_x: xform.contains('x'),
             inv_y: xform.contains('y'),
@@ -678,7 +758,23 @@ impl Touch {
         for (ty, code, v) in evs {
             match (ty, code) {
                 (EV_ABS, ABS_MT_SLOT) => self.slot = (v as usize).min(9),
-                (EV_ABS, ABS_MT_TRACKING_ID) => self.slots[self.slot].0 = v,
+                (EV_ABS, ABS_MT_TRACKING_ID) => {
+                    let s = self.slot;
+                    // a new contact (or a reused slot with a new id) is classified at the next SYN_REPORT,
+                    // when its first position is known; a lift clears the mask flag
+                    if v >= 0 && self.slots[s].0 != v {
+                        self.fresh[s] = true;
+                    }
+                    if v < 0 {
+                        if self.slots[s].0 >= 0 && !self.fresh[s] {
+                            self.learn_lift(s);
+                        }
+                        self.fresh[s] = false;
+                        self.masked[s] = false;
+                        self.retired[s] = false;
+                    }
+                    self.slots[s].0 = v;
+                }
                 (EV_ABS, ABS_MT_POSITION_X) => {
                     self.slots[self.slot].1 = v;
                     ax = Some(v);
@@ -700,9 +796,107 @@ impl Touch {
                     if self.proto_a {
                         self.a_contacts = std::mem::take(&mut self.a_frame);
                     }
+                    for s in 0..10 {
+                        let (id, x, y) = self.slots[s];
+                        if id >= 0 && !self.fresh[s] {
+                            let t = &mut self.track[s];
+                            t.2 = t.2.min(x);
+                            t.3 = t.3.min(y);
+                            t.4 = t.4.max(x);
+                            t.5 = t.5.max(y);
+                        }
+                        // stale tracking: restart the clock whenever the contact moves STALE_RADIUS from its anchor
+                        if id >= 0 {
+                            let (ax, ay, _) = self.anchor[s];
+                            if self.fresh[s] || (x - ax).abs() > STALE_RADIUS || (y - ay).abs() > STALE_RADIUS {
+                                self.anchor[s] = (x, y, Instant::now());
+                            }
+                        }
+                        if self.fresh[s] {
+                            self.fresh[s] = false;
+                            self.track[s] = (x, y, x, y, x, y, Instant::now());
+                            self.masked[s] = self.mask.iter().any(|m| x >= m[0] && y >= m[1] && x <= m[2] && y <= m[3])
+                                || self.cell_hot(x, y);
+                            if self.masked[s] {
+                                self.dropped += 1;
+                            }
+                        }
+                    }
                 }
                 _ => {}
             }
+        }
+    }
+
+    fn cell_index(&self, x: i32, y: i32) -> Option<usize> {
+        let (cx, cy) = ((x - self.xr.0) / CELL, (y - self.yr.0) / CELL);
+        let i = (cy * self.cols + cx) as usize;
+        (x >= self.xr.0 && y >= self.yr.0 && cx < self.cols && i < self.cells.len()).then_some(i)
+    }
+
+    /// Decay a cell's score to now and update its hot flag (hysteresis).
+    fn cell_update(&mut self, i: usize, add: f32) -> bool {
+        let c = &mut self.cells[i];
+        let dt = c.1.elapsed().as_secs_f32();
+        c.0 = c.0 * (-dt / LEARN_TAU_S).exp() + add;
+        c.1 = Instant::now();
+        let was = c.2;
+        c.2 = if was { c.0 >= LEARN_EXIT } else { c.0 >= LEARN_ENTER };
+        if c.2 != was {
+            let (cx, cy) = (i as i32 % self.cols, i as i32 / self.cols);
+            log::info!(
+                "touch: cell x {}-{} y {}-{} {} (score {:.1})",
+                self.xr.0 + cx * CELL,
+                self.xr.0 + cx * CELL + CELL - 1,
+                self.yr.0 + cy * CELL,
+                self.yr.0 + cy * CELL + CELL - 1,
+                if c.2 { "learned as phantom, masked" } else { "quiet again, unmasked" },
+                c.0
+            );
+        }
+        c.2
+    }
+
+    fn cell_hot(&mut self, x: i32, y: i32) -> bool {
+        match (self.learn, self.cell_index(x, y)) {
+            (true, Some(i)) => self.cell_update(i, 0.0),
+            _ => false,
+        }
+    }
+
+    /// A contact lifted: one that barely moved counts towards its start cell (masked ones too, so a cell stays
+    /// hot while its phantoms continue). Long holds are left to the stale rule.
+    fn learn_lift(&mut self, s: usize) {
+        let (x0, y0, nx, ny, mx, my, t) = self.track[s];
+        if self.learn && mx - nx <= STALE_RADIUS && my - ny <= STALE_RADIUS && t.elapsed() <= Duration::from_millis(1500) {
+            if let Some(i) = self.cell_index(x0, y0) {
+                self.cell_update(i, 1.0);
+            }
+        }
+    }
+
+    /// Retire contacts that have not moved for `stale_after` (checked every frame: a contact that stays still
+    /// sends no events at all), and log the mask/stale counters at most once a minute.
+    fn log_dropped(&mut self) {
+        if let Some(after) = self.stale_after {
+            for s in 0..10 {
+                if self.slots[s].0 >= 0 && !self.retired[s] && !self.masked[s] && !self.fresh[s] && self.anchor[s].2.elapsed() >= after {
+                    self.retired[s] = true;
+                    self.retired_n += 1;
+                    log::info!("touch: retired a contact held still at {},{} for {:.1} s", self.slots[s].1, self.slots[s].2, self.anchor[s].2.elapsed().as_secs_f32());
+                }
+            }
+        }
+        if (self.dropped > 0 || self.retired_n > 0) && self.dropped_log.elapsed() >= Duration::from_secs(60) {
+            log::info!(
+                "touch: masked {} and retired {} contacts in {:.0} s",
+                self.dropped,
+                self.retired_n,
+                self.dropped_log.elapsed().as_secs_f32()
+            );
+            self.dropped = 0;
+            self.retired_n = 0;
+            self.dropped_log = Instant::now();
         }
     }
 
@@ -739,11 +933,16 @@ impl Touch {
         let mt: Vec<_> = self
             .slots
             .iter()
-            .filter(|s| s.0 >= 0)
-            .map(|&(id, x, y)| (id as u32 & 0xff, nx(x), ny(y)))
+            .enumerate()
+            .filter(|&(i, s)| s.0 >= 0 && !self.masked[i] && !self.fresh[i] && !self.retired[i])
+            .map(|(_, &(id, x, y))| (id as u32 & 0xff, nx(x), ny(y)))
             .collect();
         if !mt.is_empty() {
             return mt;
+        }
+        // every live contact is masked: report nothing, not the BTN_TOUCH single-touch fallback
+        if self.slots.iter().any(|s| s.0 >= 0) {
+            return Vec::new();
         }
         match (self.btn, self.single) {
             (true, Some((x, y))) => vec![(0, nx(x), ny(y))],
@@ -1074,6 +1273,7 @@ fn main() -> Result<()> {
         }
         if let Some(t) = touch.as_mut() {
             t.pump();
+            t.log_dropped();
         }
         if keys.pump() && power_exits {
             // Power key: hand the device back (kiosk.sh restarts Android on the stock kernel).

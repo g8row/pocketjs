@@ -15,6 +15,13 @@ import { AttentionLayer, ClaudePage, PermissionSheet } from "./claude.tsx";
 import { BoardPage, FocusPage, PulsePage } from "./views.tsx";
 import { CHARSET } from "./charset.ts";
 import { T, W, accent } from "./theme.ts";
+import { configureTouch } from "@pocketjs/framework/input";
+
+// The tablet's cracked glass reports phantom contacts (most are masked out by
+// the kiosk host, POCKETJS_TOUCH_MASK). A press held over 1 s fires nothing,
+// so a long phantom hold, or a stuck contact the host retires
+// (POCKETJS_TOUCH_STALE_MS), cannot press what is under it.
+configureTouch({ tapMaxFrames: 60 });
 
 // Glyph coverage for runtime text (song titles, Claude messages): the build
 // bakes every codepoint it sees in source literals.

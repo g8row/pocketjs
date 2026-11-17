@@ -759,6 +759,18 @@ function cursorFrame(buttons: number, pressed: number, released: number): boolea
 let touchId = -1;
 let touchArmed: NodeMirror | null = null;
 let touchLast: { x: number; y: number } | null = null;
+let touchHeld = 0; // frames the current contact has been down
+let tapMaxFrames = 0; // 0 = a press of any length taps
+
+/**
+ * Touch tuning. `tapMaxFrames`: a contact held longer than this many frames is
+ * disarmed and fires nothing on lift (0, the default, = no limit). For panels
+ * that report phantom or stuck contacts: a long phantom hold, or a contact the
+ * host retires, then cannot press whatever is under it.
+ */
+export function configureTouch(opts: { tapMaxFrames?: number }): void {
+  if (opts.tapMaxFrames !== undefined) tapMaxFrames = Math.max(0, Math.floor(opts.tapMaxFrames));
+}
 
 /**
  * Disarm the current touch so lifting the finger fires nothing — for gesture
@@ -782,6 +794,8 @@ function touchFrame(): boolean {
   if (primary) {
     const down = touchId < 0;
     touchId = primary.id;
+    touchHeld = down ? 0 : touchHeld + 1;
+    if (tapMaxFrames > 0 && touchHeld === tapMaxFrames && touchArmed) cancelTouchTap();
     const moved = !touchLast || touchLast.x !== primary.x || touchLast.y !== primary.y;
     touchLast = { x: primary.x, y: primary.y };
     if (down || moved) {
