@@ -41,6 +41,7 @@ import { analogX, analogY } from "./frame.ts";
 import { getHost, getOps, hostViewport, type HostOps } from "./host.ts";
 import { get as pakGet } from "./pak.ts";
 import type { NodeMirror } from "./renderer.ts";
+import { touches } from "./touch.ts";
 
 let root: NodeMirror | null = null;
 let focused: NodeMirror | null = null;
@@ -747,6 +748,81 @@ function cursorFrame(buttons: number, pressed: number, released: number): boolea
   return true;
 }
 
+// ---- touch taps (input.touch) -------------------------------------------------
+//
+// A finger is a press button that carries its own position: touch-down on a
+// focusable arms it (focus + `active:`), sliding off pops it back up, sliding
+// back re-presses, and lifting over the armed node fires its onPress — the
+// cursor's click semantics, driven by the primary contact. A pushed focus
+// controller (the system OSK) owns its contacts, so taps stand aside then.
+
+let touchId = -1;
+let touchArmed: NodeMirror | null = null;
+let touchLast: { x: number; y: number } | null = null;
+let touchHeld = 0; // frames the current contact has been down
+let tapMaxFrames = 0; // 0 = a press of any length taps
+
+/**
+ * Touch tuning. `tapMaxFrames`: a contact held longer than this many frames is
+ * disarmed and fires nothing on lift (0, the default, = no limit). For panels
+ * that report phantom or stuck contacts: a long phantom hold, or a contact the
+ * host retires, then cannot press whatever is under it.
+ */
+export function configureTouch(opts: { tapMaxFrames?: number }): void {
+  if (opts.tapMaxFrames !== undefined) tapMaxFrames = Math.max(0, Math.floor(opts.tapMaxFrames));
+}
+
+/**
+ * Disarm the current touch so lifting the finger fires nothing — for gesture
+ * owners (a swipe pager) that claim a contact mid-press. The contact stays
+ * consumed until it lifts. Call from onFrame (runs before input handling).
+ */
+export function cancelTouchTap(): void {
+  touchArmed = null;
+  setPressedNode(null);
+}
+
+/** Returns true when touch consumed this frame (classic input skips). */
+function touchFrame(): boolean {
+  const list = touches();
+  if (focusControllerStack.length > 0) {
+    touchId = -1;
+    touchArmed = null;
+    return false;
+  }
+  const primary = touchId >= 0 ? list.find((c) => c.id === touchId) : list[0];
+  if (primary) {
+    const down = touchId < 0;
+    touchId = primary.id;
+    touchHeld = down ? 0 : touchHeld + 1;
+    if (tapMaxFrames > 0 && touchHeld === tapMaxFrames && touchArmed) cancelTouchTap();
+    const moved = !touchLast || touchLast.x !== primary.x || touchLast.y !== primary.y;
+    touchLast = { x: primary.x, y: primary.y };
+    if (down || moved) {
+      const target = hitFocusable(primary.x, primary.y);
+      if (down) {
+        touchArmed = target;
+        if (target) focusNode(target);
+      }
+      setPressedNode(touchArmed && target === touchArmed ? touchArmed : null);
+    }
+    return true;
+  }
+  if (touchId < 0) return false;
+  // Lift: fire when released over the node the touch armed.
+  const armed = touchArmed;
+  const last = touchLast;
+  touchId = -1;
+  touchArmed = null;
+  touchLast = null;
+  setPressedNode(null);
+  if (armed && last && hitFocusable(last.x, last.y) === armed) {
+    focusNode(armed);
+    firePress();
+  }
+  return true;
+}
+
 // ---- per-frame entry ----------------------------------------------------------
 
 /**
@@ -759,6 +835,7 @@ export function handleFrame(buttons: number): void {
   const pressed = buttons & ~prevButtons;
   const released = prevButtons & ~buttons;
   prevButtons = buttons;
+  if (touchFrame()) return;
   if (cursor && cursorFrame(buttons, pressed, released)) return;
   if (released & BTN.CIRCLE) setPressedNode(null);
   if (pressed === 0) return;

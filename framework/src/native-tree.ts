@@ -482,6 +482,12 @@ function unlink(node: NodeMirror): void {
 
 export function insertNode(parent: NodeMirror, node: NodeMirror, anchor?: NodeMirror | null): void {
   const ops = getOps();
+  // DOM semantics: insertBefore(node, node) means "before node's next
+  // sibling" (Solid's reconcileArrays swap path relies on it).
+  if (anchor === node) {
+    const p = node.parent;
+    anchor = p === parent ? (parent.children[parent.children.indexOf(node) + 1] ?? null) : null;
+  }
   unlink(node);
   sweepSet.delete(node);
   ops.insertBefore(parent.id, node.id, anchor ? anchor.id : 0);

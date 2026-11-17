@@ -3,6 +3,8 @@
 export { BTN } from "../../contracts/spec/spec.ts";
 export { touches, type TouchContact } from "./touch.ts";
 export {
+  cancelTouchTap,
+  configureTouch,
   cursorX,
   cursorY,
   enableCursor,
