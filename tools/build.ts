@@ -181,9 +181,9 @@ const framework: PocketFramework = frameworkFlag
   : parseFramework(config.framework, "pocket.config.ts");
 const frameworkConfig = FRAMEWORKS[framework];
 const entry = frameworkVariantPath(requestedEntry, framework);
-// App-local fonts: <app dir>/fonts/regular.ttf and/or bold.ttf replace the
-// default Inter faces for this app (explicit --font-* flags still win).
-for (const [slot, file] of [["regular", "regular.ttf"], ["bold", "bold.ttf"]] as const) {
+// App-local fonts: <app dir>/fonts/regular.{ttf,otf} and/or bold.{ttf,otf}
+// replace the default Inter faces for this app (explicit --font-* flags still win).
+for (const [slot, file] of [["regular", "regular.ttf"], ["regular", "regular.otf"], ["bold", "bold.ttf"], ["bold", "bold.otf"]] as const) {
   const p = join(dirname(entry), "fonts", file);
   if (!existsSync(p)) continue;
   if (slot === "regular") regularFontPath ??= p;
