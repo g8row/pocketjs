@@ -7,11 +7,10 @@
 // Every NEW field is optional: without sys.hist the page keeps its own 1m/10m/1h rings from sys.cpu/mem.
 // Action: sys.window {w} when the switch changes (deckd may use it to pick its sample cadence).
 
-import { For, createSignal, type Accessor, type JSX } from "solid-js";
-import { Text, View, type NodeMirror } from "@pocketjs/framework/components";
+import { createSignal, type Accessor, type JSX } from "solid-js";
+import { Text, View } from "@pocketjs/framework/components";
 import { onFrame } from "@pocketjs/framework/lifecycle";
-import { jump, spring } from "@pocketjs/framework/animation";
-import { C, PH, PW, TBar, TBox, TSpark } from "../ui.tsx";
+import { C, PH, PW, Seg, TBar, TBox, TSpark } from "../ui.tsx";
 import { act, desk, linkConnected } from "../link.ts";
 
 type Win = "1m" | "10m" | "1h";
@@ -21,12 +20,12 @@ const STEP_MS: Record<Win, number> = { "1m": 2_000, "10m": 20_000, "1h": 120_000
 
 // Layout (page = PW × PH = 406 × 271)
 const PAD_X = 8;
-const PAD_T = 4;
+const PAD_T = 8;
 const PAD_B = 8;
 const GAP = 10; // between cells, both ways
 const CELL_W = (PW - PAD_X * 2 - GAP) / 2; // 190
 const LINK_H = 38;
-const CELL_H = Math.floor((PH - PAD_T - PAD_B - LINK_H - GAP * 2) / 2); // 100
+const CELL_H = Math.floor((PH - PAD_T - PAD_B - LINK_H - GAP * 2) / 2); // 98
 const COLS = 21; // sparkline columns = bar cells (text-sm mono: 8 px each → 168 px, inside the 174 px frame)
 
 // ---- data helpers ---------------------------------------------------------------------
@@ -38,7 +37,7 @@ const fix = (v: number, d: number) => v.toFixed(d);
 /** Join the known parts with " · "; "–" when none is known. */
 const parts = (...p: (string | undefined)[]) => p.filter(Boolean).join(" · ") || DASH;
 
-const OS_LABEL: Record<string, string> = { linux: "LINUX", macos: "MACOS", windows: "WINDOWS" };
+const OS_LABEL: Record<string, string> = { linux: "LINUX", macos: "MAC", windows: "WINDOWS" };
 const hostLabel = () => {
   const os = desk.host?.os;
   return typeof os === "string" && os ? OS_LABEL[os] ?? os.toUpperCase() : "HOST";
@@ -155,36 +154,6 @@ function Cell(props: { title: string; icon: string; hot?: boolean; color?: strin
   );
 }
 
-/** Rounded segmented switch, 28 px tall (the kit's Seg is 22: under the 26 px touch minimum). */
-function WinSeg(props: { value: () => Win; onChange: (w: Win) => void }) {
-  return (
-    <View class="flex-row rounded-[999] border overflow-hidden" style={{ height: 28, borderColor: C.line2, bgColor: C.bg }}>
-      <For each={WINDOWS}>
-        {(o) => {
-          let n: NodeMirror | undefined;
-          return (
-            <View
-              ref={(x: NodeMirror) => (n = x)}
-              class="h-full items-center justify-center rounded-[999]"
-              style={{ width: 40, bgColor: props.value() === o ? C.raised : "#00000000" }}
-              focusable
-              onPress={() => {
-                if (n) {
-                  jump(n, "scale", 0.92);
-                  spring(n, "scale", 1);
-                }
-                props.onChange(o);
-              }}
-            >
-              <Text class="text-xs font-bold" style={{ textColor: props.value() === o ? C.fg : C.mute }}>{o}</Text>
-            </View>
-          );
-        }}
-      </For>
-    </View>
-  );
-}
-
 // ---- page -----------------------------------------------------------------------------
 
 export function BoardPage(props: { active: () => boolean }) {
@@ -201,13 +170,9 @@ export function BoardPage(props: { active: () => boolean }) {
     return fit(vs, COLS);
   };
 
-  // host CPU — the spark scales to the window's peak (25 / 50 / 100 %) so an idle host still shows shape
+  // host CPU / RAM — both sparklines on a fixed 0..100 % scale
   const cpu = () => num(sys().cpu);
   const cpuHist = () => hist("cpu");
-  const cpuMax = () => {
-    const peak = Math.max(0, ...cpuHist());
-    return peak <= 25 ? 25 : peak <= 50 ? 50 : 100;
-  };
   const cpuHot = () => (cpu() ?? 0) >= 90;
   const cpuNote = () => {
     const cores = num(sys().cores);
@@ -215,7 +180,6 @@ export function BoardPage(props: { active: () => boolean }) {
     return parts(cores !== undefined ? `${cores} cores` : undefined, ghz !== undefined ? `${fix(ghz, 1)} GHz` : undefined);
   };
 
-  // host RAM — 0..100 (memory is a level, not a rate)
   const mem = () => num(sys().mem);
   const memHot = () => (mem() ?? 0) >= 90;
   const memNote = () => {
@@ -242,12 +206,12 @@ export function BoardPage(props: { active: () => boolean }) {
   // tablet RAM
   const free = () => num(tab().memFreeMb);
   const total = () => num(tab().memTotalMb);
-  const usedShare = () => {
+  const freeShare = () => {
     const f = free();
     const t = total();
-    return f !== undefined && t ? Math.max(0, Math.min(1, 1 - f / t)) : 0;
+    return f !== undefined && t ? Math.max(0, Math.min(1, f / t)) : 0;
   };
-  const ramTight = () => free() !== undefined && !!total() && usedShare() >= 0.9;
+  const ramTight = () => free() !== undefined && !!total() && freeShare() <= 0.1;
 
   const choose = (w: Win) => {
     if (w === win()) return;
@@ -262,7 +226,7 @@ export function BoardPage(props: { active: () => boolean }) {
       <View class="flex-row" style={{ gap: GAP }}>
         <Cell title={`${hostLabel()} CPU`} icon="cpu" hot={cpuHot()} color={C.wait}>
           <Big value={pct(cpu())} unit="%" color={accentOr(cpuHot(), C.wait)} />
-          <TSpark values={cpuHist} max={cpuMax()} color={cpuHot() ? C.wait : undefined} />
+          <TSpark values={cpuHist} max={100} color={cpuHot() ? C.wait : undefined} />
           <Note text={cpuNote()} />
         </Cell>
         <Cell title={`${hostLabel()} RAM`} icon="memory" hot={memHot()} color={C.wait}>
@@ -279,7 +243,7 @@ export function BoardPage(props: { active: () => boolean }) {
         </Cell>
         <Cell title="TABLET RAM" icon="tablet" hot={ramTight()} color={C.wait}>
           <Big value={free() !== undefined ? String(Math.round(free()!)) : DASH} unit="MB" color={accentOr(ramTight(), C.wait)} />
-          <TBar value={usedShare} cells={COLS} size="sm" color={ramTight() ? C.wait : undefined} />
+          <TBar value={freeShare} cells={COLS} size="sm" color={ramTight() ? C.wait : undefined} />
           <Note text={total() !== undefined ? `free of ${Math.round(total()!)} MB` : "free"} />
         </Cell>
       </View>
@@ -301,7 +265,7 @@ export function BoardPage(props: { active: () => boolean }) {
           </View>
         </TBox>
         <View style={{ paddingB: 1 }}>
-          <WinSeg value={win} onChange={choose} />
+          <Seg options={WINDOWS} value={win} onChange={(w) => choose(w as Win)} />
         </View>
       </View>
     </View>
