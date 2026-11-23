@@ -303,7 +303,7 @@ export function SettingsPage(props: { active: () => boolean }) {
         <ToggleRow
           icon={wifiOn() ? "wifi" : "wifi-off"}
           label="wifi"
-          note={() => (s() ? (wifiOn() ? "on" : "off") : dash)}
+          note={() => { const st = s(); if (!st) return dash; if (!wifiOn()) return " "; const id = st.wifi?.ssid; return id ? (id.length > 10 ? `${id.slice(0, 9)}…` : id) : "no network"; }} // the toggle shows on/off; the note names the network
           on={wifiOn}
           enabled={can}
           onChange={toggle("wifi", "wifi")}
