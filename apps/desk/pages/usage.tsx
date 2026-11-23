@@ -210,9 +210,9 @@ interface Proj {
   out: number;
   pct: number;
 }
-const MAX_PROJ = 5;
+const MAX_PROJ = 4;
 const NAME_CH = 13;
-const CELLS = 27;
+const CELLS = 25;
 
 /** Top projects; past MAX_PROJ the tail folds into one "+n more" row. */
 function topProjects(raw: unknown): Proj[] {
@@ -241,7 +241,8 @@ function ProjectRow(props: { p: Proj; first: boolean; more: boolean }) {
 
 // ---- page -----------------------------------------------------------------------------------
 
-const GAP = 8;
+const GAP = 6;
+const M = 8; // page margin: content is (PW - 2M) × (PH - 2M) = 390 × 255
 const SEG_W = 96; // today | 7d
 const CHART_W = 48 * 7.2; // 48 mono cells at xs (Geist Mono advance 0.6 em)
 
@@ -322,10 +323,10 @@ export function UsagePage(props: { active: () => boolean }) {
   };
 
   return (
-    <View class="flex-col" style={{ width: PW, height: PH, gap: GAP }}>
+    <View class="flex-col" style={{ width: PW, height: PH, gap: GAP, paddingL: M, paddingR: M, paddingT: M, paddingB: M }}>
       {/* headline + range switch */}
       <View class="flex-row items-start" style={{ gap: 10 }}>
-        <TBox title={headTitle()} right={model()} w={PW - 10 - SEG_W}>
+        <TBox title={headTitle()} right={model()} w={PW - 2 * M - 10 - SEG_W}>
           <View class="flex-row items-end justify-between">
             <Text class="text-4xl leading-[38]" style={{ height: 38, textColor: idle() ? C.mute : accent() }}>
               {headNum()}
