@@ -18,6 +18,9 @@ const mock = resolve(opt("--mock") ?? join(import.meta.dir, "mock.json"));
 const frames = Number(opt("--frames") ?? 240); // frames stepped before the shot (4 s: the pager has settled)
 
 if (!existsSync(join(ROOT, "hosts/web/pocketjs.wasm"))) throw new Error("hosts/web/pocketjs.wasm missing: run `bun tools/wasm.ts`");
+// a fresh checkout has no generated styles module yet, and the typecheck before the build needs one
+const gen = join(ROOT, "framework/src/styles.generated.ts");
+if (!existsSync(gen)) await Bun.write(gen, "export const STYLE_IDS: Record<string, number> = {};\n");
 if (!flag("--no-build")) {
   const b = Bun.spawnSync(["bun", "pocket", "compile", "--target", "android", "--manifest", "apps/desk/pocket.json", "--project-root", "."], { cwd: ROOT, stdout: "pipe", stderr: "pipe" });
   if (b.exitCode !== 0) {
