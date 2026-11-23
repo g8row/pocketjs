@@ -98,13 +98,13 @@ export function TBox(props: {
       </View>
       <Show when={props.title}>
         <View class="absolute flex-row" style={{ insetT: 0, insetL: 6, bgColor: props.bg ?? C.ground, paddingL: 4, paddingR: 4 }}>
-          <Text class="text-xs font-bold tracking-wide" style={{ textColor: ttl() }}>{props.title}</Text>
+          <Text class="text-xs font-bold tracking-wide leading-[12]" style={{ height: 12, textColor: ttl() }}>{props.title}</Text>
         </View>
       </Show>
       <Show when={props.right || props.rightIcon}>
         <View class="absolute flex-row items-center gap-[3]" style={{ insetT: 0, insetR: 6, bgColor: props.bg ?? C.ground, paddingL: 4, paddingR: 4 }}>
           <Show when={props.right}>
-            <Text class="text-xs font-bold" style={{ textColor: C.mute }}>{props.right}</Text>
+            <Text class="text-xs font-bold leading-[12]" style={{ height: 12, textColor: C.mute }}>{props.right}</Text>
           </Show>
           <Show when={props.rightIcon}>
             <Icon name={props.rightIcon!} size="xs" color={C.mute} />
@@ -159,7 +159,7 @@ export function KV(props: { k: string; v: string; kw?: number; color?: string })
 // ---- rounded (touchable) ---------------------------------------------------------------------
 
 /** Squish feedback shared by the touchables. */
-function squish(n: NodeMirror | undefined, to = 0.92) {
+export function squish(n: NodeMirror | undefined, to = 0.92) {
   if (!n) return;
   jump(n, "scale", to);
   spring(n, "scale", 1);
@@ -229,15 +229,17 @@ export function Chip(props: { label: string; on?: boolean; color?: string; dot?:
   );
 }
 
-/** Rounded segmented switch. */
-export function Seg(props: { options: string[]; value: () => string; onChange: (v: string) => void }) {
+/** Rounded segmented switch (28 px tall by default: the touch minimum is 26). The selected option is a
+ *  pill inset 2 px inside the outline, so its fill never pokes out of the rounded ends. */
+export function Seg(props: { options: string[]; value: () => string; onChange: (v: string) => void; h?: number }) {
+  const h = props.h ?? 28;
   return (
-    <View class="flex-row rounded-[999] border overflow-hidden" style={{ height: 22, borderColor: C.line2 }}>
+    <View class="flex-row rounded-[999] border items-center" style={{ height: h, borderColor: C.line2, paddingL: 2, paddingR: 2 }}>
       <For each={props.options}>
         {(o) => (
           <View
-            class="h-full items-center justify-center px-[10]"
-            style={{ bgColor: props.value() === o ? C.raised : "#00000000" }}
+            class="rounded-[999] items-center justify-center px-[10]"
+            style={{ height: h - 6, bgColor: props.value() === o ? C.raised : "#00000000" }}
             focusable
             onPress={() => props.onChange(o)}
           >
@@ -262,7 +264,7 @@ export function Toggle(props: { on: () => boolean; onChange: (v: boolean) => voi
   });
   return (
     <View
-      class="rounded-[999] justify-center"
+      class="rounded-[999] flex-row items-center"
       style={{ width: 30, height: 17, paddingL: 2, bgColor: props.on() ? accent() : "#2a2a2a" }}
       focusable
       onPress={() => props.onChange(!props.on())}
