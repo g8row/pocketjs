@@ -64,6 +64,14 @@ export const NF = {
   "eye": "󰈈", // U+F0208
   "sleep": "󰒲", // U+F04B2
   "flash-auto": "󰉂", // U+F0242
+  "repeat-once": "󰑘", // U+F0458
+  "repeat-off": "󰑗", // U+F0457
+  "shuffle-off": "󰒞", // U+F049E
+  "battery-alert": "󰂃", // U+F0083
+  "battery-low": "󰁻", // U+F007B
+  "help-circle": "󰘥", // U+F0625
+  "robot": "󱙺", // U+F167A
+  "arrow-left": "󰁍", // U+F004D
 } as const;
 
 export type IconName = keyof typeof NF;
