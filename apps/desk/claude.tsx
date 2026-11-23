@@ -16,6 +16,7 @@ import { Morph } from "./shapes.tsx";
 import { gesture } from "./pager.tsx";
 import { ON_ACCENT, T, accent } from "./theme.ts";
 import { DECOR_STEP, decorFrame } from "./clock.ts";
+import { SAFE_X } from "./damage.ts";
 
 type Active = () => boolean;
 const clip = (s: unknown, n: number): string => {
@@ -182,7 +183,7 @@ function Scroller(props: {
   onFrame(() => {
     if (!props.active()) return;
     const t = touches()[0];
-    const sx = props.x;
+    const sx = SAFE_X + props.x; // panes start right of the damaged strip (app.tsx)
     const sy = TOP + props.y;
     if (t) {
       if (!start && !outside) {

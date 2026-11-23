@@ -16,6 +16,8 @@ import { BoardPage, FocusPage, PulsePage } from "./views.tsx";
 import { CHARSET } from "./charset.ts";
 import { T, W, accent } from "./theme.ts";
 import { configureTouch } from "@pocketjs/framework/input";
+import { SAFE_X } from "./damage.ts";
+import { Ridges } from "./ridges.tsx";
 
 // The tablet's cracked glass reports phantom contacts (most are masked out by
 // the kiosk host, POCKETJS_TOUCH_MASK). A press held over 1 s fires nothing,
@@ -27,12 +29,17 @@ configureTouch({ tapMaxFrames: 60 });
 // bakes every codepoint it sees in source literals.
 void CHARSET;
 
-const DEFAULT_PANES = ["home", "claude", "pulse", "deck", "music", "board", "focus", "system"];
+/** Width of the clean area right of the damaged strip: the nav and every pane. */
+const PW = W - SAFE_X;
+
+const DEFAULT_PANES = ["home", "claude", "deck", "music", "board", "system"];
 const KNOWN = new Set(DEFAULT_PANES);
+// PULSE and FOCUS are off for now (6 tabs fit right of the panel damage); their
+// pages stay in views.tsx, and a layout that lists them simply skips them.
 
 function Shell(props: { panes: string[]; fps: () => number; gaps: number[] }) {
   const panes = props.panes;
-  const pager = createPager(panes.length, W);
+  const pager = createPager(panes.length, PW);
   const on_ = (i: number) => () => pager.page() === i || pager.dragging();
   const claudeIdx = panes.indexOf("claude");
   const waiting = () => (desk.claude?.counts?.waiting ?? 0) > 0;
@@ -69,7 +76,7 @@ function Shell(props: { panes: string[]; fps: () => number; gaps: number[] }) {
     }
   };
   return (
-    <View class="w-full h-full flex-col">
+    <View class="h-full flex-col" style={{ width: PW }}>
       {/* the site's nav: a strip of cells divided by 1px rules; tap to jump */}
       <View class="h-[28] flex-row bg-[#222222] gap-[1]">
         <For each={panes}>
@@ -98,7 +105,7 @@ function Shell(props: { panes: string[]; fps: () => number; gaps: number[] }) {
             repaint (without this every repaint walked all panes' nodes). */}
         <pager.Track>
           {panes.map((id, i) => (
-            <View class="h-full overflow-hidden" style={{ width: W }}>
+            <View class="h-full overflow-hidden" style={{ width: PW }}>
               {page(id, i)}
             </View>
           ))}
@@ -119,7 +126,13 @@ export default function Desk() {
     return (list.length ? list : DEFAULT_PANES).join(",");
   });
   return (
-    <View debugName="Desk" class={T.screen}>
+    <View debugName="Desk" class="w-full h-full flex-row bg-[#070707]">
+      {/* The panel is cracked and has dead pixels left of x 106 (damage.ts):
+          that strip only shows an ambient ridge field, never text or touch
+          targets. Everything else lives in the clean 406 px to its right. */}
+      <View class="h-full overflow-hidden" style={{ width: SAFE_X }}>
+        <Ridges cols={17} rows={30} ridges={7} every={8} />
+      </View>
       <Show when={key()} keyed>
         {(k) => <Shell panes={k.split(",")} fps={fps} gaps={gaps} />}
       </Show>
