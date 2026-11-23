@@ -1,51 +1,28 @@
 // MUSIC: now playing on the host computer (deckd `music`, cover blob `music.art`).
 //
-//   ┌────────────┐  ┌─ NOW PLAYING ──────────── 󰝚 ┐   read-only → terminal frame:
-//   │   cover    │  │ title (Geist lg, ≤ 2 lines)  │   title, artist · album, player · os,
-//   │ or a shape │  │ artist · album (mono soft)   │   ASCII progress bar + times
-//   │            │  │ 󰌽 spotify · linux            │
-//   └────────────┘  │ ██████████░░░░░░░░░░░░░░░░   │
-//   (shuf) (rep)    │ 2:41                   6:07  │
-//                   └──────────────────────────────┘
-//   󰕾 ═══●══ 62     ════════●═════════  (seek)       touchable → rounded:
-//                   ( prev ) ( play ) ( next )        sliders, pill buttons
+// The cover and the track info carry the page; the controls are quiet. Read-only parts are
+// terminal (the NOW PLAYING frame, times); touchables are bare icons with a rounded press state,
+// one filled round play/pause, and tappable ASCII block bars (seek and volume: tap or drag on the
+// █░ cells; the bar claims the gesture so the pager doesn't swipe).
 //
 // The cover is the real album art when deckd has pushed one; otherwise a single-colour shape
-// picked per track (hash of title + artist) from a small set: Morph squircle / 8- / 12-point
-// cookies and plain primitives (squircle, pill, plus, flower, clover, sun, orbit). It turns and breathes
-// while playing (paint-only whole-pixel translates, ≤ 15 Hz commits), holds still when paused, and every
-// hook idles while the page is off screen.
+// picked per track (hash of title + artist): squircle, pill, plus, 8-/12-point cookies, flower,
+// clover, sun, orbit. It turns and breathes while playing (whole-pixel translates, ≤ 15 Hz
+// commits), holds still when paused, and every hook idles while the page is off screen.
 
 import { Show, createEffect, createMemo, createSignal } from "solid-js";
 import { Image, Text, View, type NodeMirror } from "@pocketjs/framework/components";
 import { onFrame } from "@pocketjs/framework/lifecycle";
 import { createJumpBatch } from "@pocketjs/framework/animation";
+import { cancelTouchTap, touches } from "@pocketjs/framework/input";
 import { act, blobSrc, desk } from "../link.ts";
-import { accent } from "../theme.ts";
+import { ON_ACCENT, accent } from "../theme.ts";
 import { DECOR_STEP, decorFrame, decorPhase } from "../clock.ts";
-import { Btn, C, Icon, PANE_X, PANE_Y, PH, PW, Slider, TBox } from "../ui.tsx";
+import { gesture } from "../pager.tsx";
+import { C, Icon, PANE_X, PANE_Y, PH, PW, TBox, squish } from "../ui.tsx";
 
 type Active = () => boolean;
-
-// ---- geometry (page px; the page is PW × PH = 406 × 271) --------------------------------------
-
-const P = 8; // outer padding
-const COVER = 164; // cover / shape square
-const LX = P;
-const RX = LX + COVER + 10; // 182: right column
-const RW = PW - P - RX; // 216
-const BOX_H = 176; // NOW PLAYING frame (incl. its 6 px title band)
-const SEEK_Y = P + BOX_H + 6; // 190: seek slider touch band (24 px)
-const CTRL_H = 40; // transport buttons
-const CTRL_Y = PH - P - CTRL_H; // 223
-const TOG_Y = P + COVER + 10; // 182: shuffle / repeat
-const TOG_H = 30;
-const VOL_Y = CTRL_Y + (CTRL_H - 24) / 2; // 231: volume slider band, centred on the transport row
-const VOL_ICON = 18;
-const VOL_NUM = 22;
-const VOL_W = COVER - VOL_ICON - VOL_NUM - 12; // 112
-const IN_W = RW - 2 - 14; // text width inside the frame (border + 7 px padding each side)
-const CELLS = 27; // TBar cells (mono xs ≈ 7.2 px each)
+const P = 8; // margin on every side
 
 // ---- text helpers (the core has no word wrap) -------------------------------------------------
 
@@ -125,6 +102,7 @@ type Music = {
   volume?: number;
 };
 const OS_ICON: Record<string, string> = { linux: "linux", macos: "apple", windows: "windows" };
+const OS_LABEL: Record<string, string> = { linux: "linux", macos: "mac", windows: "windows" };
 const REPEAT_NEXT = { off: "all", all: "one", one: "off" } as const;
 
 /** A deckd value with an optimistic local override until deckd reports a new value. */
@@ -265,17 +243,18 @@ function Shape(props: { kind: string; size: number; color: () => string; playing
 }
 
 /** The per-track fallback cover: shape kind and tint from a hash of title + artist. */
-function ShapeCover(props: { seed: () => string; playing: () => boolean; idle: () => boolean; active: Active }) {
+function ShapeCover(props: { size: number; seed: () => string; playing: () => boolean; idle: () => boolean; active: Active }) {
   const h = createMemo(() => hash(props.seed()));
   const kind = createMemo(() => KINDS[h() % KINDS.length]!);
   const color = () => ((h() >>> 8) % 3 === 2 ? C.soft : accent());
-  const S = COVER - 20;
+  // the shape fractions keep every radius ≤ 32 px (anti-aliased) only up to S = 144
+  const S = Math.min(144, props.size - 20);
   return (
-    <View class="relative items-center justify-center rounded-[14]" style={{ width: COVER, height: COVER, bgColor: C.bg }}>
+    <View class="relative items-center justify-center rounded-[14]" style={{ width: props.size, height: props.size, bgColor: C.bg }}>
       <Show
         when={!props.idle()}
         fallback={
-          <View class="items-center justify-center rounded-[38]" style={{ width: r0(S * 0.8), height: r0(S * 0.8), bgColor: "#1a1a1a" }}>
+          <View class="items-center justify-center rounded-[32]" style={{ width: r0(S * 0.8), height: r0(S * 0.8), bgColor: "#1a1a1a" }}>
             <Icon name="music" size="4xl" color={C.mute} />
           </View>
         }
@@ -290,32 +269,116 @@ function ShapeCover(props: { seed: () => string; playing: () => boolean; idle: (
 }
 const r0 = Math.round;
 
-/** The kit's TBar, except an empty filled part is left out instead of drawn as " " (TBar's
- *  placeholder space shifts the empty cells one column right at 0 %). Fixed width. */
-function Bar(props: { value: () => number; cells: number; color: string }) {
-  const n = () => Math.max(0, Math.min(props.cells, Math.round(props.value() * props.cells)));
+// ---- touchables -----------------------------------------------------------------------------------
+
+type BarSize = "xs" | "sm" | "base";
+const CELL: Record<BarSize, number> = { xs: 7, sm: 8, base: 10 }; // mono advance (round(size × 0.6))
+const BAR_CLS: Record<BarSize, string> = { xs: "text-xs font-bold", sm: "text-sm font-bold", base: "text-base font-bold" };
+
+/** A tappable ASCII block bar (█ filled, ░ empty): tap or drag anywhere on it. Hit-tests touches
+ *  itself, so it needs its SCREEN position (x, y = top of the touch band). Claims the gesture while
+ *  held; `onInput` while dragging, `onChange` on release. Fixed width = cells × cell advance. */
+function BlockBar(props: {
+  x: number;
+  y: number;
+  cells: number;
+  size?: BarSize;
+  value: () => number;
+  color?: string;
+  h?: number;
+  onInput?: (v: number) => void;
+  onChange: (v: number) => void;
+  active: Active;
+}) {
+  const size = props.size ?? "sm";
+  const W = props.cells * CELL[size];
+  const H = props.h ?? 28;
+  const [drag, setDrag] = createSignal<number | null>(null);
+  let held = false;
+  const at = (tx: number) => Math.max(0, Math.min(1, (tx - props.x) / W));
+  onFrame(() => {
+    if (!props.active()) return;
+    const t = touches()[0];
+    if (t) {
+      if (!held && gesture.owner === "" && t.x >= props.x - 6 && t.x < props.x + W + 6 && t.y >= props.y && t.y < props.y + H) {
+        held = true;
+        gesture.owner = "slider";
+        cancelTouchTap();
+      }
+      if (held) {
+        const v = at(t.x);
+        if (v !== drag()) {
+          setDrag(v);
+          props.onInput?.(v);
+        }
+      }
+      return;
+    }
+    if (held) {
+      held = false;
+      gesture.owner = "";
+      const fin = drag();
+      setDrag(null);
+      if (fin !== null) props.onChange(fin);
+    }
+  });
+  const n = () => Math.max(0, Math.min(props.cells, Math.round((drag() ?? props.value()) * props.cells)));
   return (
-    <View class="flex-row" style={{ height: 16 }}>
+    <View class="flex-row items-center" style={{ width: W, height: H }}>
       <Show when={n() > 0}>
-        <Text class="text-xs font-bold" style={{ textColor: props.color }}>{"█".repeat(Math.max(1, n()))}</Text>
+        <Text class={BAR_CLS[size]} style={{ textColor: drag() !== null ? C.fg : props.color ?? accent() }}>{"█".repeat(Math.max(1, n()))}</Text>
       </Show>
       <Show when={n() < props.cells}>
-        <Text class="text-xs font-bold" style={{ textColor: C.dim }}>{"░".repeat(Math.max(1, props.cells - n()))}</Text>
+        <Text class={BAR_CLS[size]} style={{ textColor: C.dim }}>{"░".repeat(Math.max(1, props.cells - n()))}</Text>
       </Show>
+    </View>
+  );
+}
+
+/** A bare icon button: no fill or outline, a rounded raised fill only while pressed. */
+function IconBtn(props: { icon: string; color?: string; size?: "base" | "lg" | "xl" | "2xl"; w?: number; h?: number; onPress: () => void }) {
+  return (
+    <View
+      class="items-center justify-center rounded-[999] active:bg-[#1d1d1d]"
+      style={{ width: props.w ?? 36, height: props.h ?? 32 }}
+      focusable
+      onPress={props.onPress}
+    >
+      <Icon name={props.icon} size={props.size ?? "lg"} color={props.color ?? C.soft} />
+    </View>
+  );
+}
+
+/** The one filled control: round play/pause. */
+function PlayBtn(props: { playing: () => boolean; d: number }) {
+  let n: NodeMirror | undefined;
+  return (
+    <View
+      ref={(x: NodeMirror) => (n = x)}
+      class="items-center justify-center rounded-[999]"
+      style={{ width: props.d, height: props.d, bgColor: accent() }}
+      focusable
+      onPress={() => {
+        squish(n);
+        act("music.toggle");
+      }}
+    >
+      <Icon name={props.playing() ? "pause" : "play"} size="xl" color={ON_ACCENT} />
     </View>
   );
 }
 
 // ---- the page -----------------------------------------------------------------------------------
 
-export function MusicPage(props: { active: () => boolean }) {
+/** Everything the layouts share: state, text and handlers. */
+function useMusic(active: Active) {
   const m = (): Music => (desk.music ?? {}) as Music;
   const title = () => str(m().title);
   const idle = () => !title() || (m().state !== "playing" && m().state !== "paused");
   const playing = () => !idle() && m().state === "playing";
   const dur = () => (Number(m().duration) > 0 ? Number(m().duration) : 0);
-  const art = () => blobSrc("music.art");
-  const os = () => str(desk.host?.os) || "linux";
+  const osKey = () => str(desk.host?.os) || "linux";
+  const os = () => OS_LABEL[osKey()] ?? osKey();
 
   // position: deckd sends it on change; extrapolate while playing, redraw once a second
   let basePos = -1;
@@ -323,7 +386,7 @@ export function MusicPage(props: { active: () => boolean }) {
   const [pos, setPos] = createSignal(0);
   const [scrub, setScrub] = createSignal<number | null>(null);
   onFrame(() => {
-    if (!props.active() || !decorPhase(10)) return;
+    if (!active() || !decorPhase(10)) return;
     const p = Number(m().position) || 0;
     if (p !== basePos) {
       basePos = p;
@@ -332,10 +395,20 @@ export function MusicPage(props: { active: () => boolean }) {
     let now = playing() ? basePos + (Date.now() - baseAt) / 1000 : basePos;
     if (dur()) now = Math.min(now, dur());
     const whole = Math.floor(now);
-    if (whole !== Math.floor(pos())) setPos(whole);
+    if (whole !== pos()) setPos(whole);
   });
   const shownPos = () => scrub() ?? pos();
-  const progress = () => (dur() ? Math.max(0, Math.min(1, shownPos() / dur())) : 0);
+  const progress = () => (dur() ? Math.max(0, Math.min(1, pos() / dur())) : 0);
+  const seekInput = (v: number) => (dur() && !idle() ? setScrub(Math.round(v * dur())) : undefined);
+  const seek = (v: number) => {
+    setScrub(null);
+    if (!dur() || idle()) return;
+    const p = Math.round(v * dur());
+    basePos = p; // show it now; deckd's next position wins
+    baseAt = Date.now();
+    setPos(p);
+    act("music.seek", { pos: p });
+  };
 
   const [shuffle, setShuffle] = optimistic(() => !!m().shuffle);
   const [repeat, setRepeat] = optimistic<"off" | "all" | "one">(() => (m().repeat === "all" || m().repeat === "one" ? m().repeat! : "off"));
@@ -343,127 +416,269 @@ export function MusicPage(props: { active: () => boolean }) {
   const [volDrag, setVolDrag] = createSignal<number | null>(null);
   const volShown = () => volDrag() ?? vol();
 
-  // text, measured to the frame
-  const titleLines = createMemo(() => (idle() ? ["nothing playing"] : wrapLines(title().toLowerCase(), IN_W, 18, 2)));
+  return {
+    m,
+    title,
+    idle,
+    playing,
+    dur,
+    osKey,
+    os,
+    shownPos,
+    scrubbing: () => scrub() !== null,
+    progress,
+    seekInput,
+    seek,
+    shuffle,
+    toggleShuffle: () => {
+      setShuffle(!shuffle());
+      act("music.shuffle");
+    },
+    repeat,
+    cycleRepeat: () => {
+      setRepeat(REPEAT_NEXT[repeat()]);
+      act("music.repeat");
+    },
+    vol,
+    volShown,
+    volInput: (v: number) => setVolDrag(Math.round(v * 100)),
+    setVolume: (v: number) => {
+      const n = Math.round(v * 100);
+      setVolDrag(null);
+      setVol(n);
+      act("music.volume", { v: n });
+    },
+  };
+}
+type MusicState = ReturnType<typeof useMusic>;
+
+/** Title (Geist lg), artist / album (mono), source (os icon + player · os), measured to `w`. */
+function TrackText(props: { s: MusicState; w: number; titleLines: number }) {
+  const s = props.s;
+  const titleLines = createMemo(() => (s.idle() ? ["nothing playing"] : wrapLines(s.title().toLowerCase(), props.w, 18, props.titleLines)));
   const subLines = createMemo(() => {
-    if (idle()) return [fit(`start a track on ${os()}`, IN_W, 12, true)];
-    const artist = str(m().artist).toLowerCase();
-    const album = str(m().album).toLowerCase();
+    if (s.idle()) return [fit(`start a track on ${s.os()}`, props.w, 12, true)];
+    const artist = str(s.m().artist).toLowerCase();
+    const album = str(s.m().album).toLowerCase();
     const both = [artist, album].filter(Boolean).join(" · ");
     if (!both) return ["unknown artist"];
     // "artist · album" on one line if it fits; else artist, then album on its own line
-    if (textW(both, 14, true) <= IN_W || titleLines().length > 1 || !artist || !album) return [fit(both, IN_W, 14, true)];
-    return [fit(artist, IN_W, 14, true), fit(album, IN_W, 14, true)];
+    if (textW(both, 14, true) <= props.w || !artist || !album) return [fit(both, props.w, 14, true)];
+    return [fit(artist, props.w, 14, true), fit(album, props.w, 14, true)];
   });
-  const source = () => fit([str(m().player).toLowerCase(), os()].filter(Boolean).join(" · "), IN_W - 18, 12, true);
-  const boxTitle = () => (idle() ? "MUSIC" : playing() ? "NOW PLAYING" : "PAUSED");
-
+  const source = () => fit([str(s.m().player).toLowerCase(), s.os()].filter(Boolean).join(" · "), props.w - 18, 12, true);
   return (
-    <View class="relative" style={{ width: PW, height: PH }}>
-      {/* cover: real art, or a shape */}
-      <View class="absolute" style={{ insetL: LX, insetT: P, width: COVER, height: COVER }}>
-        <Show when={art() !== ""} fallback={<ShapeCover seed={() => `${title()}\u0000${str(m().artist)}`} playing={playing} idle={idle} active={props.active} />}>
-          <Image class="w-[164] h-[164] rounded-[14]" src={art()} />
-        </Show>
+    <View class="flex-col gap-[3]">
+      <Text class="text-lg" style={{ textColor: s.idle() ? C.mute : C.fg }}>{titleLines().join("\n")}</Text>
+      <Text class={s.idle() ? "text-xs font-bold" : "text-sm font-bold"} style={{ textColor: s.idle() ? C.mute : C.soft }}>{subLines().join("\n")}</Text>
+      <View class="flex-row items-center gap-[6]" style={{ paddingT: 3 }}>
+        <Icon name={OS_ICON[s.osKey()] ?? "display"} size="xs" color={C.mute} />
+        <Text class="text-xs font-bold" style={{ textColor: C.mute }}>{source()}</Text>
       </View>
+    </View>
+  );
+}
 
-      {/* shuffle / repeat */}
-      <View class="absolute flex-row gap-[8]" style={{ insetL: LX, insetT: TOG_Y, width: COVER }}>
-        <Btn
-          icon="shuffle"
-          kind={shuffle() ? "primary" : "default"}
-          h={TOG_H}
-          grow
-          onPress={() => {
-            setShuffle(!shuffle());
-            act("music.shuffle");
-          }}
-        />
-        <Btn
-          icon="repeat"
-          label={repeat() === "one" ? "1" : undefined}
-          kind={repeat() === "off" ? "default" : "primary"}
-          h={TOG_H}
-          grow
-          onPress={() => {
-            setRepeat(REPEAT_NEXT[repeat()]);
-            act("music.repeat");
-          }}
-        />
+function Cover(props: { s: MusicState; size: number; active: Active }) {
+  const art = () => blobSrc("music.art");
+  return (
+    <Show
+      when={art() !== ""}
+      fallback={<ShapeCover size={props.size} seed={() => `${props.s.title()}\u0000${str(props.s.m().artist)}`} playing={props.s.playing} idle={props.s.idle} active={props.active} />}
+    >
+      <Image class="rounded-[14]" style={{ width: props.size, height: props.size }} src={art()} />
+    </Show>
+  );
+}
+
+const Elapsed = (props: { s: MusicState; w?: number; right?: boolean }) => (
+  <Text class={props.right ? "text-xs font-bold text-right" : "text-xs font-bold"} style={{ width: props.w ?? 40, textColor: props.s.scrubbing() ? accent() : C.soft }}>
+    {props.s.idle() ? "-:--" : mmss(props.s.shownPos())}
+  </Text>
+);
+const Total = (props: { s: MusicState; w?: number }) => (
+  <Text class="text-xs font-bold text-right" style={{ width: props.w ?? 40, textColor: C.mute }}>
+    {props.s.dur() && !props.s.idle() ? mmss(props.s.dur()) : "-:--"}
+  </Text>
+);
+const boxTitle = (s: MusicState) => (s.idle() ? "MUSIC" : s.playing() ? "NOW PLAYING" : "PAUSED");
+
+function ShuffleRepeat(props: { s: MusicState }) {
+  const s = props.s;
+  return (
+    <>
+      <IconBtn icon={s.shuffle() ? "shuffle" : "shuffle-off"} size="base" color={s.shuffle() ? accent() : C.mute} w={32} h={28} onPress={s.toggleShuffle} />
+      <IconBtn
+        icon={s.repeat() === "one" ? "repeat-once" : s.repeat() === "all" ? "repeat" : "repeat-off"}
+        size="base"
+        color={s.repeat() === "off" ? C.mute : accent()}
+        w={32}
+        h={28}
+        onPress={s.cycleRepeat}
+      />
+    </>
+  );
+}
+
+function Transport(props: { s: MusicState; d?: number }) {
+  return (
+    <>
+      <IconBtn icon="prev" size="xl" color={C.fg} w={44} h={40} onPress={() => act("music.prev")} />
+      <PlayBtn playing={props.s.playing} d={props.d ?? 46} />
+      <IconBtn icon="next" size="xl" color={C.fg} w={44} h={40} onPress={() => act("music.next")} />
+    </>
+  );
+}
+
+/** Volume icon + tappable block bar; (x, y) = the bar's page position. */
+function Volume(props: { s: MusicState; x: number; y: number; cells: number; active: Active }) {
+  const s = props.s;
+  return (
+    <View class="absolute flex-row items-center gap-[4]" style={{ insetL: props.x - 20, insetT: props.y, height: 28 }}>
+      <View class="items-center" style={{ width: 16 }}>
+        <Icon name={s.volShown() === 0 ? "vol-mute" : s.volShown() < 50 ? "vol-down" : "vol-up"} size="sm" color={C.mute} />
       </View>
+      <BlockBar x={PANE_X + props.x} y={PANE_Y + props.y} cells={props.cells} size="xs" value={() => s.vol() / 100} color={C.soft} onInput={s.volInput} onChange={s.setVolume} active={props.active} />
+    </View>
+  );
+}
 
-      {/* volume */}
-      <View class="absolute flex-row items-center gap-[6]" style={{ insetL: LX, insetT: VOL_Y, width: COVER, height: 24 }}>
-        <View class="items-center" style={{ width: VOL_ICON }}>
-          <Icon name={volShown() === 0 ? "vol-mute" : volShown() < 50 ? "vol-down" : "vol-up"} size="base" color={C.soft} />
-        </View>
-        <Slider
-          x={PANE_X + LX + VOL_ICON + 6}
-          y={PANE_Y + VOL_Y}
-          w={VOL_W}
-          value={() => vol() / 100}
-          onInput={(v) => setVolDrag(Math.round(v * 100))}
-          onChange={(v) => {
-            const n = Math.round(v * 100);
-            setVolDrag(null);
-            setVol(n);
-            act("music.volume", { v: n });
-          }}
-          active={props.active}
-        />
-        <Text class="text-xs font-bold text-right" style={{ width: VOL_NUM, textColor: C.mute }}>{String(volShown())}</Text>
+// Layout A: a big cover on the left with the quiet toggles + volume under it; the frame on the
+// right holds the track and the seek bar, transport under it.
+function LayoutA(props: { s: MusicState; active: Active }) {
+  const s = props.s;
+  const COV = 212;
+  const RX = P + COV + 10; // 230
+  const RW = PW - P - RX; // 168
+  const IN = RW - 16; // 152
+  const BOX_H = 200; // frame 14..208, content 23..201
+  const BAR_Y = P + 149; // 157: touch band 157..185
+  const CELLS = Math.floor(IN / CELL.sm); // 19
+  return (
+    <>
+      <View class="absolute" style={{ insetL: P, insetT: P }}>
+        <Cover s={s} size={COV} active={props.active} />
       </View>
-
-      {/* track info (read-only) */}
+      <View class="absolute flex-row items-center gap-[2]" style={{ insetL: P - 2, insetT: 227, height: 28 }}>
+        <ShuffleRepeat s={s} />
+      </View>
+      <Volume s={s} x={P + COV - 10 * CELL.xs} y={227} cells={10} active={props.active} />
       <View class="absolute" style={{ insetL: RX, insetT: P, width: RW, height: BOX_H }}>
-        <TBox title={boxTitle()} rightIcon="music" hot={playing()} h={BOX_H}>
-          <View class="flex-1 flex-col justify-between">
-            <View class="flex-col gap-[3]">
-              <Text class="text-lg" style={{ textColor: idle() ? C.mute : C.fg }}>{titleLines().join("\n")}</Text>
-              <Text class={idle() ? "text-xs font-bold" : "text-sm font-bold"} style={{ textColor: idle() ? C.mute : C.soft }}>{subLines().join("\n")}</Text>
-              <View class="flex-row items-center gap-[6]" style={{ paddingT: 3 }}>
-                <Icon name={OS_ICON[os()] ?? "display"} size="xs" color={C.mute} />
-                <Text class="text-xs font-bold" style={{ textColor: C.mute }}>{source()}</Text>
-              </View>
+        <TBox title={boxTitle(s)} rightIcon="music" hot={s.playing()} w={RW} h={BOX_H}>
+          <TrackText s={s} w={IN} titleLines={3} />
+        </TBox>
+      </View>
+      <View class="absolute" style={{ insetL: RX + 8, insetT: BAR_Y }}>
+        <BlockBar x={PANE_X + RX + 8} y={PANE_Y + BAR_Y} cells={CELLS} size="sm" value={s.progress} color={s.playing() ? accent() : C.soft} onInput={s.seekInput} onChange={s.seek} active={props.active} />
+      </View>
+      <View class="absolute flex-row justify-between" style={{ insetL: RX + 8, insetT: BAR_Y + 28, width: CELLS * CELL.sm }}>
+        <Elapsed s={s} />
+        <Total s={s} />
+      </View>
+      <View class="absolute flex-row items-center justify-center gap-[10]" style={{ insetL: RX, insetT: PH - P - 46, width: RW, height: 46 }}>
+        <Transport s={s} />
+      </View>
+    </>
+  );
+}
+
+/** The control row shared by B and C (bottom 46 px): toggles left, transport centred, volume right. */
+function ControlRow(props: { s: MusicState; active: Active }) {
+  const Y = PH - P - 46;
+  return (
+    <>
+      <View class="absolute flex-row items-center gap-[2]" style={{ insetL: P - 2, insetT: Y + 9, height: 28 }}>
+        <ShuffleRepeat s={props.s} />
+      </View>
+      <View class="absolute flex-row items-center justify-center gap-[10]" style={{ insetL: PW / 2 - 80, insetT: Y, width: 160, height: 46 }}>
+        <Transport s={props.s} />
+      </View>
+      <Volume s={props.s} x={PW - P - 12 * CELL.xs} y={Y + 9} cells={12} active={props.active} />
+    </>
+  );
+}
+
+// Layout B: cover + frame on top, a full-width seek bar with the times at its ends, one quiet
+// control row at the bottom.
+function LayoutB(props: { s: MusicState; active: Active }) {
+  const s = props.s;
+  const COV = 168;
+  const RX = P + COV + 10; // 186
+  const RW = PW - P - RX; // 212
+  const BAR_Y = P + COV + 4; // 180
+  const CELLS = 38; // 304 px of sm cells, times either side
+  const BX = Math.round((PW - CELLS * CELL.sm) / 2); // 51
+  return (
+    <>
+      <View class="absolute" style={{ insetL: P, insetT: P }}>
+        <Cover s={s} size={COV} active={props.active} />
+      </View>
+      <View class="absolute" style={{ insetL: RX, insetT: P, width: RW, height: COV }}>
+        <TBox title={boxTitle(s)} rightIcon="music" hot={s.playing()} w={RW} h={COV}>
+          <TrackText s={s} w={RW - 16} titleLines={2} />
+        </TBox>
+      </View>
+      <View class="absolute flex-row items-center" style={{ insetL: P, insetT: BAR_Y, width: PW - 2 * P, height: 28 }}>
+        <Elapsed s={s} w={BX - P - 4} />
+        <View style={{ width: CELLS * CELL.sm + 8 }} />
+        <Total s={s} w={BX - P - 4} />
+      </View>
+      <View class="absolute" style={{ insetL: BX, insetT: BAR_Y }}>
+        <BlockBar x={PANE_X + BX} y={PANE_Y + BAR_Y} cells={CELLS} size="sm" value={s.progress} color={s.playing() ? accent() : C.soft} onInput={s.seekInput} onChange={s.seek} active={props.active} />
+      </View>
+      <ControlRow s={s} active={props.active} />
+    </>
+  );
+}
+
+// Layout C: one terminal frame holds cover, track and seek bar; one quiet control row under it.
+function LayoutC(props: { s: MusicState; active: Active }) {
+  const s = props.s;
+  const BOX_H = 206; // frame 14..214
+  const COV = 182; // content top 23
+  const TX = P + 8 + COV + 12; // 210
+  const TW = PW - P - 8 - TX; // 180
+  const CELLS = Math.floor(TW / CELL.sm); // 22
+  const BAR_Y = 159;
+  return (
+    <>
+      <View class="absolute" style={{ insetL: P, insetT: P, width: PW - 2 * P, height: BOX_H }}>
+        <TBox title={boxTitle(s)} rightIcon="music" hot={s.playing()} w={PW - 2 * P} h={BOX_H}>
+          <View class="flex-row gap-[12]">
+            <View style={{ marginT: 1 }}>
+              <Cover s={s} size={COV} active={props.active} />
             </View>
-            <View class="flex-col gap-[1]">
-              <Bar value={progress} cells={CELLS} color={playing() ? accent() : C.soft} />
-              <View class="flex-row justify-between">
-                <Text class="text-xs font-bold" style={{ width: 48, textColor: scrub() !== null ? accent() : C.soft }}>{idle() ? "-:--" : mmss(shownPos())}</Text>
-                <Text class="text-xs font-bold text-right" style={{ width: 48, textColor: C.mute }}>{dur() && !idle() ? mmss(dur()) : "-:--"}</Text>
-              </View>
-            </View>
+            <TrackText s={s} w={TW} titleLines={3} />
           </View>
         </TBox>
       </View>
-
-      {/* seek */}
-      <View class="absolute" style={{ insetL: RX, insetT: SEEK_Y, width: RW, height: 24 }}>
-        <Slider
-          x={PANE_X + RX}
-          y={PANE_Y + SEEK_Y}
-          w={RW}
-          value={progress}
-          onInput={(v) => (dur() && !idle() ? setScrub(Math.round(v * dur())) : undefined)}
-          onChange={(v) => {
-            setScrub(null);
-            if (!dur() || idle()) return;
-            const p = Math.round(v * dur());
-            basePos = p; // show it now; deckd's next position wins
-            baseAt = Date.now();
-            setPos(p);
-            act("music.seek", { pos: p });
-          }}
-          active={props.active}
-        />
+      <View class="absolute" style={{ insetL: TX, insetT: BAR_Y }}>
+        <BlockBar x={PANE_X + TX} y={PANE_Y + BAR_Y} cells={CELLS} size="sm" value={s.progress} color={s.playing() ? accent() : C.soft} onInput={s.seekInput} onChange={s.seek} active={props.active} />
       </View>
-
-      {/* transport */}
-      <View class="absolute flex-row gap-[8]" style={{ insetL: RX, insetT: CTRL_Y, width: RW, height: CTRL_H }}>
-        <Btn icon="prev" h={CTRL_H} grow onPress={() => act("music.prev")} />
-        <Btn icon={playing() ? "pause" : "play"} kind="primary" h={CTRL_H} w={84} onPress={() => act("music.toggle")} />
-        <Btn icon="next" h={CTRL_H} grow onPress={() => act("music.next")} />
+      <View class="absolute flex-row justify-between" style={{ insetL: TX, insetT: BAR_Y + 28, width: CELLS * CELL.sm }}>
+        <Elapsed s={s} />
+        <Total s={s} />
       </View>
+      <ControlRow s={s} active={props.active} />
+    </>
+  );
+}
+
+export function MusicPage(props: { active: () => boolean }) {
+  const s = useMusic(props.active);
+  // preview-only switch between the candidate layouts (mock key `musicLayout`)
+  const layout = () => String((desk as Record<string, unknown>).musicLayout ?? "a");
+  return (
+    <View class="relative" style={{ width: PW, height: PH }}>
+      <Show when={layout() === "a"}>
+        <LayoutA s={s} active={props.active} />
+      </Show>
+      <Show when={layout() === "b"}>
+        <LayoutB s={s} active={props.active} />
+      </Show>
+      <Show when={layout() === "c"}>
+        <LayoutC s={s} active={props.active} />
+      </Show>
     </View>
   );
 }
