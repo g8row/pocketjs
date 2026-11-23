@@ -19,7 +19,7 @@ import { act, blobSrc, desk } from "../link.ts";
 import { ON_ACCENT, accent } from "../theme.ts";
 import { DECOR_STEP, decorFrame, decorPhase } from "../clock.ts";
 import { gesture } from "../pager.tsx";
-import { C, Icon, PANE_X, PANE_Y, PH, PW, TBox, squish } from "../ui.tsx";
+import { C, Icon, PANE_X, PANE_Y, PH, PW, Slider, TBox, squish } from "../ui.tsx";
 
 type Active = () => boolean;
 const P = 8; // margin on every side
@@ -530,59 +530,22 @@ function Transport(props: { s: MusicState; d?: number }) {
   );
 }
 
-/** Volume icon + tappable block bar; (x, y) = the bar's page position. */
+/** Volume icon + the kit's block-bar Slider; (x, y) = the slider's page position. */
 function Volume(props: { s: MusicState; x: number; y: number; cells: number; active: Active }) {
   const s = props.s;
   return (
-    <View class="absolute flex-row items-center gap-[4]" style={{ insetL: props.x - 20, insetT: props.y, height: 28 }}>
+    <View class="absolute flex-row items-center gap-[4]" style={{ insetL: props.x - 20, insetT: props.y, height: 24 }}>
       <View class="items-center" style={{ width: 16 }}>
         <Icon name={s.volShown() === 0 ? "vol-mute" : s.volShown() < 50 ? "vol-down" : "vol-up"} size="sm" color={C.mute} />
       </View>
-      <BlockBar x={PANE_X + props.x} y={PANE_Y + props.y} cells={props.cells} size="xs" value={() => s.vol() / 100} color={C.soft} onInput={s.volInput} onChange={s.setVolume} active={props.active} />
+      <View class="overflow-hidden" style={{ width: props.cells * CELL.xs, height: 24 }}>
+        <Slider x={PANE_X + props.x} y={PANE_Y + props.y} w={props.cells * CELL.xs} value={() => s.vol() / 100} onInput={s.volInput} onChange={s.setVolume} active={props.active} />
+      </View>
     </View>
   );
 }
 
-// Layout A: a big cover on the left with the quiet toggles + volume under it; the frame on the
-// right holds the track and the seek bar, transport under it.
-function LayoutA(props: { s: MusicState; active: Active }) {
-  const s = props.s;
-  const COV = 212;
-  const RX = P + COV + 10; // 230
-  const RW = PW - P - RX; // 168
-  const IN = RW - 16; // 152
-  const BOX_H = 200; // frame 14..208, content 23..201
-  const BAR_Y = P + 149; // 157: touch band 157..185
-  const CELLS = Math.floor(IN / CELL.sm); // 19
-  return (
-    <>
-      <View class="absolute" style={{ insetL: P, insetT: P }}>
-        <Cover s={s} size={COV} active={props.active} />
-      </View>
-      <View class="absolute flex-row items-center gap-[2]" style={{ insetL: P - 2, insetT: 227, height: 28 }}>
-        <ShuffleRepeat s={s} />
-      </View>
-      <Volume s={s} x={P + COV - 10 * CELL.xs} y={227} cells={10} active={props.active} />
-      <View class="absolute" style={{ insetL: RX, insetT: P, width: RW, height: BOX_H }}>
-        <TBox title={boxTitle(s)} rightIcon="music" hot={s.playing()} w={RW} h={BOX_H}>
-          <TrackText s={s} w={IN} titleLines={3} />
-        </TBox>
-      </View>
-      <View class="absolute" style={{ insetL: RX + 8, insetT: BAR_Y }}>
-        <BlockBar x={PANE_X + RX + 8} y={PANE_Y + BAR_Y} cells={CELLS} size="sm" value={s.progress} color={s.playing() ? accent() : C.soft} onInput={s.seekInput} onChange={s.seek} active={props.active} />
-      </View>
-      <View class="absolute flex-row justify-between" style={{ insetL: RX + 8, insetT: BAR_Y + 28, width: CELLS * CELL.sm }}>
-        <Elapsed s={s} />
-        <Total s={s} />
-      </View>
-      <View class="absolute flex-row items-center justify-center gap-[10]" style={{ insetL: RX, insetT: PH - P - 46, width: RW, height: 46 }}>
-        <Transport s={s} />
-      </View>
-    </>
-  );
-}
-
-/** The control row shared by B and C (bottom 46 px): toggles left, transport centred, volume right. */
+/** The control row (bottom 46 px): toggles left, transport centred, volume right. */
 function ControlRow(props: { s: MusicState; active: Active }) {
   const Y = PH - P - 46;
   return (
@@ -593,52 +556,21 @@ function ControlRow(props: { s: MusicState; active: Active }) {
       <View class="absolute flex-row items-center justify-center gap-[10]" style={{ insetL: PW / 2 - 80, insetT: Y, width: 160, height: 46 }}>
         <Transport s={props.s} />
       </View>
-      <Volume s={props.s} x={PW - P - 12 * CELL.xs} y={Y + 9} cells={12} active={props.active} />
+      <Volume s={props.s} x={PW - P - 12 * CELL.xs} y={Y + 11} cells={12} active={props.active} />
     </>
   );
 }
 
-// Layout B: cover + frame on top, a full-width seek bar with the times at its ends, one quiet
-// control row at the bottom.
-function LayoutB(props: { s: MusicState; active: Active }) {
-  const s = props.s;
-  const COV = 168;
-  const RX = P + COV + 10; // 186
-  const RW = PW - P - RX; // 212
-  const BAR_Y = P + COV + 4; // 180
-  const CELLS = 38; // 304 px of sm cells, times either side
-  const BX = Math.round((PW - CELLS * CELL.sm) / 2); // 51
-  return (
-    <>
-      <View class="absolute" style={{ insetL: P, insetT: P }}>
-        <Cover s={s} size={COV} active={props.active} />
-      </View>
-      <View class="absolute" style={{ insetL: RX, insetT: P, width: RW, height: COV }}>
-        <TBox title={boxTitle(s)} rightIcon="music" hot={s.playing()} w={RW} h={COV}>
-          <TrackText s={s} w={RW - 16} titleLines={2} />
-        </TBox>
-      </View>
-      <View class="absolute flex-row items-center" style={{ insetL: P, insetT: BAR_Y, width: PW - 2 * P, height: 28 }}>
-        <Elapsed s={s} w={BX - P - 4} />
-        <View style={{ width: CELLS * CELL.sm + 8 }} />
-        <Total s={s} w={BX - P - 4} />
-      </View>
-      <View class="absolute" style={{ insetL: BX, insetT: BAR_Y }}>
-        <BlockBar x={PANE_X + BX} y={PANE_Y + BAR_Y} cells={CELLS} size="sm" value={s.progress} color={s.playing() ? accent() : C.soft} onInput={s.seekInput} onChange={s.seek} active={props.active} />
-      </View>
-      <ControlRow s={s} active={props.active} />
-    </>
-  );
-}
-
-// Layout C: one terminal frame holds cover, track and seek bar; one quiet control row under it.
-function LayoutC(props: { s: MusicState; active: Active }) {
+// One terminal frame holds cover, track and the seek bar; one quiet control row under it.
+// (Variants A and B, a big cover with the frame beside it and a full-width seek bar, are in the
+// "wip(desk): music layouts A/B/C" commit.)
+function Layout(props: { s: MusicState; active: Active }) {
   const s = props.s;
   const BOX_H = 206; // frame 14..214
   const COV = 182; // content top 23
   const TX = P + 8 + COV + 12; // 210
   const TW = PW - P - 8 - TX; // 180
-  const CELLS = Math.floor(TW / CELL.sm); // 22
+  const CELLS = Math.floor(TW / CELL.xs); // 25
   const BAR_Y = 159;
   return (
     <>
@@ -653,9 +585,9 @@ function LayoutC(props: { s: MusicState; active: Active }) {
         </TBox>
       </View>
       <View class="absolute" style={{ insetL: TX, insetT: BAR_Y }}>
-        <BlockBar x={PANE_X + TX} y={PANE_Y + BAR_Y} cells={CELLS} size="sm" value={s.progress} color={s.playing() ? accent() : C.soft} onInput={s.seekInput} onChange={s.seek} active={props.active} />
+        <BlockBar x={PANE_X + TX} y={PANE_Y + BAR_Y} cells={CELLS} size="xs" value={s.progress} color={s.playing() ? accent() : C.soft} onInput={s.seekInput} onChange={s.seek} active={props.active} />
       </View>
-      <View class="absolute flex-row justify-between" style={{ insetL: TX, insetT: BAR_Y + 28, width: CELLS * CELL.sm }}>
+      <View class="absolute flex-row justify-between" style={{ insetL: TX, insetT: BAR_Y + 28, width: CELLS * CELL.xs }}>
         <Elapsed s={s} />
         <Total s={s} />
       </View>
@@ -666,19 +598,9 @@ function LayoutC(props: { s: MusicState; active: Active }) {
 
 export function MusicPage(props: { active: () => boolean }) {
   const s = useMusic(props.active);
-  // preview-only switch between the candidate layouts (mock key `musicLayout`)
-  const layout = () => String((desk as Record<string, unknown>).musicLayout ?? "a");
   return (
     <View class="relative" style={{ width: PW, height: PH }}>
-      <Show when={layout() === "a"}>
-        <LayoutA s={s} active={props.active} />
-      </Show>
-      <Show when={layout() === "b"}>
-        <LayoutB s={s} active={props.active} />
-      </Show>
-      <Show when={layout() === "c"}>
-        <LayoutC s={s} active={props.active} />
-      </Show>
+      <Layout s={s} active={props.active} />
     </View>
   );
 }
