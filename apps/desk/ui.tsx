@@ -15,7 +15,7 @@ import { onFrame } from "@pocketjs/framework/lifecycle";
 import { jump, spring } from "@pocketjs/framework/animation";
 import { cancelTouchTap, touches } from "@pocketjs/framework/input";
 import { gesture } from "./pager.tsx";
-import { glyph } from "./nf.ts";
+import { glyph, iconStep } from "./nf.ts";
 import { SAFE_X, PANE_TOP } from "./damage.ts";
 import { ON_ACCENT, accent } from "./theme.ts";
 
@@ -61,8 +61,14 @@ const MONO: Record<Size, string> = {
 
 /** A Nerd Font icon, tinted like text. `name` is an nf.ts key (unknown names draw a dot). */
 export function Icon(props: { name: string; size?: Size; color?: string }) {
+  // optical size correction (nf.ts ICON_STEP): tall glyphs drawn one baked size smaller
+  const SIZES: Size[] = ["xs", "sm", "base", "lg", "xl", "2xl", "4xl"];
+  const sz = () => {
+    const want = props.size ?? "base";
+    return SIZES[Math.max(0, SIZES.indexOf(want) + iconStep(props.name, want))]!;
+  };
   return (
-    <Text class={MONO[props.size ?? "base"]} style={{ textColor: props.color ?? C.fg }}>
+    <Text class={MONO[sz()]} style={{ textColor: props.color ?? C.fg }}>
       {glyph(props.name)}
     </Text>
   );
