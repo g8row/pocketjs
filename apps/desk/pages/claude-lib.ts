@@ -120,8 +120,11 @@ export { shown, setShown };
 // ---- small formatters -----------------------------------------------------------------------
 
 export const lower = (s: unknown): string => (typeof s === "string" ? s.toLowerCase() : "");
-/** The host's OS name for prose ("on linux"); never "mac". */
-export const hostOs = (): string => lower(desk.host?.os) || "the host";
+/** The host's OS name for prose ("on linux", "on mac"; DESIGN.md §2). */
+export const hostOs = (): string => {
+  const os = lower(desk.host?.os);
+  return os === "macos" ? "mac" : os || "the host";
+};
 
 /** Seconds left on a request held by deckd's gate, and the full length (the first value seen). */
 export function createCountdown(sid: () => string, held: () => any) {

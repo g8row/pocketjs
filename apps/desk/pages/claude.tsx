@@ -34,7 +34,7 @@ type S = () => any;
 // ---- geometry (page px) -------------------------------------------------------------------
 const PAD = 8;
 const IN_W = PW - PAD * 2; // 390
-const CHIPS_H = 22;
+const CHIPS_H = 26; // touch minimum
 const BAR_H = 26;
 const GAP = 8;
 const MAIN_Y = PAD + CHIPS_H + GAP; // 38
@@ -250,31 +250,118 @@ function SessionChip(props: { s: any; on: () => boolean; maxLabel: () => number;
   );
 }
 
-function Chips(props: { sel: S; active: Active }) {
-  const list = () => {
-    const all = stableSessions();
-    const top = all.slice(0, 4);
-    // a session that needs you always makes the cut
-    const wait = all.find((s) => s.state === "waiting" && !top.includes(s));
-    return wait ? [...top.slice(0, 3), wait] : top;
-  };
+/** Which sessions get a chip. Up to 4 fit the row; with more, 3 chips and a "+N" chip. The
+ *  selected session and every waiting session are always among the visible ones (in stable order),
+ *  the rest fill up from the first seen. */
+function chipSets(selId: string): { vis: any[]; hidden: any[] } {
+  const all = stableSessions();
+  if (all.length <= 4) return { vis: all, hidden: [] };
+  const keep = new Set<string>();
+  const add = (id: string) => keep.size < 3 && id && keep.add(id);
+  add(selId);
+  for (const x of all) if (x.state === "waiting") add(x.id);
+  for (const x of all) add(x.id);
+  return { vis: all.filter((x) => keep.has(x.id)), hidden: all.filter((x) => !keep.has(x.id)) };
+}
+
+const plusLabel = (n: number) => `+${n}`;
+const PLUS_W = (n: number) => 22 + 2 + textW(plusLabel(n), 14);
+
+function Chips(props: { sel: S; active: Active; open: () => boolean; setOpen: (v: boolean) => void }) {
+  const sets = createMemo(() => chipSets(props.sel()?.id ?? ""));
+  const list = () => sets().vis;
+  const hidden = () => sets().hidden;
   // label budget: chips keep their natural width while the row fits; otherwise the longest names
   // are capped at one shared width (water-filling). Chrome per chip: padding 20, dot 10, gap 6,
-  // border 2, plus the note ("asks") and its gap.
+  // border 2, plus the note ("asks") and its gap; the "+N" chip takes its share first.
   const cap = createMemo(() => {
     const l = list();
-    const chrome = l.map((s) => 38 + (chipNote(s) ? textW(chipNote(s), 12, true) + 6 : 0));
-    const avail = IN_W - 6 * (l.length - 1) - chrome.reduce((x, y) => x + y, 0);
-    const want = l.map((s) => textW(chipName(s), 14));
+    const chrome = l.map((x) => 38 + (chipNote(x) ? textW(chipNote(x), 12, true) + 6 : 0));
+    const plus = hidden().length ? PLUS_W(hidden().length) + 6 : 0;
+    const avail = IN_W - plus - 6 * (l.length - 1) - chrome.reduce((x, y) => x + y, 0);
+    const want = l.map((x) => textW(chipName(x), 14));
     let c = Math.max(...want, 0);
     while (c > 24 && want.reduce((x, w) => x + Math.min(w, c), 0) > avail) c -= 2;
     return c;
   });
-  const maxLabel = () => cap();
+  const hiddenWait = () => hidden().some((x) => x.state === "waiting");
+  let plusN: NodeMirror | undefined;
   return (
     <View class="flex-row gap-[6]" style={{ height: CHIPS_H, width: IN_W }}>
-      <For each={list()}>{(s) => <SessionChip s={s} on={() => props.sel()?.id === s.id} maxLabel={maxLabel} active={props.active} />}</For>
+      <For each={list()}>{(x) => <SessionChip s={x} on={() => props.sel()?.id === x.id} maxLabel={cap} active={props.active} />}</For>
+      <Show when={hidden().length > 0}>
+        <View
+          ref={(x: NodeMirror) => (plusN = x)}
+          class="flex-row items-center justify-center rounded-[999] border"
+          style={{
+            height: CHIPS_H,
+            width: PLUS_W(hidden().length),
+            bgColor: props.open() ? C.raised : C.bg,
+            borderColor: hiddenWait() ? C.wait : props.open() ? "#4a4a4a" : C.line2,
+          }}
+          focusable
+          onPress={() => {
+            if (plusN) {
+              jump(plusN, "scale", 0.94);
+              spring(plusN, "scale", 1);
+            }
+            props.setOpen(!props.open());
+          }}
+        >
+          <Text class="text-sm" style={{ textColor: hiddenWait() ? C.wait : props.open() ? "#ffffff" : C.soft }}>
+            {plusLabel(hidden().length)}
+          </Text>
+        </View>
+      </Show>
     </View>
+  );
+}
+
+const PICK_W = 220;
+const PICK_ROW = 30;
+const PICK_MAX = 5;
+
+/** The "+N" chooser: a rounded list of the sessions without a chip, dropped under the chip row at
+ *  the right edge. Tap one to show it (it then takes a chip); tap outside to close. */
+function Chooser(props: { sel: S; open: () => boolean; setOpen: (v: boolean) => void; active: Active }) {
+  const hidden = () => chipSets(props.sel()?.id ?? "").hidden.slice(0, PICK_MAX);
+  return (
+    <Show when={props.open() && hidden().length > 0}>
+      <View class="absolute" style={{ insetL: 0, insetT: 0, width: PW, height: PH }} focusable onPress={() => props.setOpen(false)} />
+      <View
+        class="absolute flex-col rounded-[16] border"
+        style={{ insetR: PAD, insetT: PAD + CHIPS_H + 6, width: PICK_W, gap: 6, paddingL: 6, paddingR: 6, paddingT: 6, paddingB: 6, bgColor: C.card, borderColor: C.line2 }}
+      >
+        <For each={hidden()}>
+          {(x) => {
+            const wait = () => x.state === "waiting";
+            const note = () => chipNote(x) || lower(x.state) || " ";
+            return (
+              <View
+                class="flex-row items-center gap-[8] rounded-[999] border px-[10]"
+                style={{ height: PICK_ROW, bgColor: C.raised, borderColor: wait() ? C.wait : C.line2 }}
+                focusable
+                onPress={() => {
+                  setSelected(x.id);
+                  props.setOpen(false);
+                }}
+              >
+                <Show when={x.state === "working"} fallback={<View class="w-[7] h-[7] rounded-[2]" style={{ bgColor: stateColor(x.state) }} />}>
+                  <Morph size={10} layers={2} spin={() => 4} color={accent} active={props.active} />
+                </Show>
+                <Text class="text-sm" style={{ textColor: wait() ? C.wait : C.fg }}>
+                  {fit(chipName(x), PICK_W - 12 - 20 - 10 - 16 - textW(note(), 12, true) - 4, 14)}
+                </Text>
+                <View class="flex-1" />
+                <Text class="text-xs font-bold" style={{ textColor: wait() ? C.wait : C.mute }}>
+                  {note()}
+                </Text>
+              </View>
+            );
+          }}
+        </For>
+      </View>
+    </Show>
   );
 }
 
@@ -608,7 +695,7 @@ function Bar(props: { s: S; reading: () => boolean; setReading: (v: boolean) => 
   return (
     <View class="flex-row items-center gap-[6]" style={{ height: BAR_H, width: IN_W }}>
       <Show when={props.reading()}>
-        <Btn label="← back" onPress={() => props.setReading(false)} />
+        <Btn label="back" icon="arrow-left" onPress={() => props.setReading(false)} />
       </Show>
       <Btn label="copy reply" icon="copy" kind={props.reading() || s().state === "waiting" ? "default" : "primary"} onPress={() => act("claude.copy", { session: s().id })} />
       <Show when={!props.reading() && props.peekLabel()}>
@@ -663,6 +750,9 @@ export function ClaudePage(props: { active: Active }) {
   createEffect(() => setShown(sel()?.id ?? ""));
   const [reading, setReading] = createSignal(false);
   const [peek, setPeek] = createSignal(false);
+  const [picking, setPicking] = createSignal(false);
+  // scrollers under the open chooser must not take its touches
+  const live = () => props.active() && !picking();
   const a = createAnswers(s);
   // a session that starts needing you pulls you out of reading mode / peeking
   createEffect(
@@ -689,14 +779,14 @@ export function ClaudePage(props: { active: Active }) {
           when={reading()}
           fallback={
             <>
-              <Chips sel={sel} active={props.active} />
+              <Chips sel={sel} active={props.active} open={picking} setOpen={setPicking} />
               <View class="flex-row" style={{ height: MAIN_H, gap: COL_GAP }}>
-                <Show when={deciding() && !peek()} fallback={<Conversation s={s} active={props.active} onRead={() => setReading(true)} />}>
+                <Show when={deciding() && !peek()} fallback={<Conversation s={s} active={live} onRead={() => setReading(true)} />}>
                   <Show when={asking()}>
-                    <QuestionBody a={a} s={s} active={props.active} />
+                    <QuestionBody a={a} s={s} active={live} />
                   </Show>
                   <Show when={planning()}>
-                    <PlanBody s={s} active={props.active} />
+                    <PlanBody s={s} active={live} />
                   </Show>
                   <Show when={permission()}>
                     <PermissionBody s={s} />
@@ -736,6 +826,9 @@ export function ClaudePage(props: { active: Active }) {
           </TBox>
         </Show>
         <Bar s={s} reading={reading} setReading={setReading} peekLabel={peekLabel} peek={peek} setPeek={setPeek} />
+        <Show when={!reading()}>
+          <Chooser sel={sel} open={picking} setOpen={setPicking} active={props.active} />
+        </Show>
       </View>
     </Show>
   );
