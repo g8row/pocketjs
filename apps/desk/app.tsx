@@ -17,7 +17,7 @@ import { CHARSET } from "./charset.ts";
 import { T, W, accent } from "./theme.ts";
 import { configureTouch } from "@pocketjs/framework/input";
 import { SAFE_X } from "./damage.ts";
-import { Ridges } from "./ridges.tsx";
+import { Rail } from "./rail.tsx";
 
 // The tablet's cracked glass reports phantom contacts (most are masked out by
 // the kiosk host, POCKETJS_TOUCH_MASK). A press held over 1 s fires nothing,
@@ -128,11 +128,10 @@ export default function Desk() {
   return (
     <View debugName="Desk" class="w-full h-full flex-row bg-[#070707]">
       {/* The panel is cracked and has dead pixels left of x 106 (damage.ts):
-          that strip only shows an ambient ridge field, never text or touch
-          targets. Everything else lives in the clean 406 px to its right. */}
-      <View class="h-full overflow-hidden" style={{ width: SAFE_X }}>
-        <Ridges cols={17} rows={30} ridges={7} every={8} />
-      </View>
+          that strip shows an ambient ridge field plus HOME's essentials in its
+          one clean pocket (rail.tsx), never touch targets. Everything else
+          lives in the clean 406 px to its right. */}
+      <Rail />
       <Show when={key()} keyed>
         {(k) => <Shell panes={k.split(",")} fps={fps} gaps={gaps} />}
       </Show>
