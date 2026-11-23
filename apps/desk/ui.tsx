@@ -251,36 +251,31 @@ export function Seg(props: { options: string[]; value: () => string; onChange: (
   );
 }
 
-/** Rounded on/off toggle. */
+/** Terminal-style on/off box (user decision: rectangular, not a knob switch). On = accent fill with a dark
+ *  "on", off = 1 px frame with a mute "off". The touch band (36 × 26) is larger than the drawn box (32 × 20). */
 export function Toggle(props: { on: () => boolean; onChange: (v: boolean) => void }) {
-  let knob: NodeMirror | undefined;
-  let shown: boolean | undefined;
-  onFrame(() => {
-    const v = props.on();
-    if (v !== shown && knob) {
-      shown = v;
-      spring(knob, "translateX", v ? 13 : 0);
-    }
-  });
+  let n: NodeMirror | undefined;
   return (
     <View
-      class="rounded-[999] flex-row items-center"
-      style={{ width: 30, height: 17, paddingL: 2, bgColor: props.on() ? accent() : "#2a2a2a" }}
+      ref={(x: NodeMirror) => (n = x)}
+      class="items-center justify-center"
+      style={{ width: 36, height: 26 }}
       focusable
-      onPress={() => props.onChange(!props.on())}
+      onPress={() => {
+        squish(n, 0.94);
+        props.onChange(!props.on());
+      }}
     >
-      <View
-        ref={(x: NodeMirror) => (knob = x)}
-        class="rounded-[999]"
-        style={{ width: 13, height: 13, translateX: 0, bgColor: props.on() ? ON_ACCENT : "#6a6a6a" }}
-      />
+      <View class="border items-center justify-center" style={{ width: 32, height: 20, borderColor: props.on() ? accent() : C.frame, bgColor: props.on() ? accent() : "#00000000" }}>
+        <Text class="text-xs font-bold" style={{ textColor: props.on() ? ON_ACCENT : C.mute }}>{props.on() ? "on" : "off"}</Text>
+      </View>
     </View>
   );
 }
 
-/** Rounded slider (0..1). Hit-tests touches itself, so it needs its SCREEN position (x, y) and size;
- *  a drag claims the gesture so the pager doesn't swipe. `onChange` fires on release with the final
- *  value (`onInput` while dragging). */
+/** Terminal-style slider (0..1): a row of mono block cells across `w` (accent █ filled, dim ░ empty) that you
+ *  tap or drag. Hit-tests touches itself, so it needs its SCREEN position (x, y) and width; a drag claims the
+ *  gesture so the pager doesn't swipe. `onChange` fires on release with the final value (`onInput` while dragging). */
 export function Slider(props: {
   x: number;
   y: number;
@@ -319,12 +314,12 @@ export function Slider(props: {
       if (fin !== null) props.onChange(fin);
     }
   });
-  const fillW = () => Math.max(3, Math.round(v() * props.w));
+  const cells = Math.max(4, Math.floor(props.w / 7)); // 12 px mono advance is 7 px
+  const n = () => Math.max(0, Math.min(cells, Math.round(v() * cells)));
   return (
-    <View class="relative justify-center" style={{ width: props.w, height: H }}>
-      <View class="absolute rounded-[3]" style={{ insetL: 0, insetT: 9, width: props.w, height: 6, bgColor: "#2a2a2a" }} />
-      <View class="absolute rounded-[3]" style={{ insetL: 0, insetT: 9, width: fillW(), height: 6, bgColor: accent() }} />
-      <View class="absolute rounded-[999]" style={{ insetT: 3, insetL: Math.round(v() * (props.w - 18)), width: 18, height: 18, bgColor: C.fg }} />
+    <View class="flex-row items-center" style={{ width: props.w, height: H }}>
+      <Text class="text-xs font-bold" style={{ textColor: drag() !== null ? C.fg : accent() }}>{"█".repeat(n()) || " "}</Text>
+      <Text class="text-xs font-bold" style={{ textColor: C.dim }}>{"░".repeat(cells - n()) || " "}</Text>
     </View>
   );
 }

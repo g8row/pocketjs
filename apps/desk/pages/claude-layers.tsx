@@ -24,7 +24,7 @@ export function PermissionSheet(props: { onClaude: () => boolean; onOpen: () => 
   const TEXT_W = PW - 16 - 24 - 2 - 22 - 12 * 3 - (70 + 78);
   return (
     <Sheet open={open} color={C.wait}>
-      <Icon name="spark" size="2xl" color={C.wait} />
+      <Icon name="robot" size="2xl" color={C.wait} />
       <View class="flex-1 flex-col gap-[2]">
         <Text class="text-xs font-bold" style={{ textColor: C.wait }}>
           {fit(`${lower(p()?.session) || "claude"} · ${left()}s`, TEXT_W, 12, true)}
@@ -96,7 +96,7 @@ export function AttentionLayer(props: { onOpen: () => void; onClaude: () => bool
             props.onOpen();
           }}
         >
-          <Icon name="spark" size="base" color={C.onWait} />
+          <Icon name="robot" size="base" color={C.onWait} />
           <Text class="text-sm" style={{ textColor: C.onWait }}>
             {fit(`${lower(a().name) || "claude"} ${lower(a().reason) || "needs you"}`, TEXT_W, 14)}
           </Text>
