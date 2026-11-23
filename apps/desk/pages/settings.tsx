@@ -5,7 +5,7 @@
 // filters are paused (the cracked glass needs them, but they can also eat a real confirm tap), and they are
 // resumed however the sheet closes (cancel, confirm, leaving the page, the timeout, unmount).
 //
-// Preview only: a `previewSheet` key in mock.json's device.state ("linux" | "android" | "uboot" | "ui" |
+// Preview only: a `previewSheet` key in mock.json's device.state ("linux" | "android" | "uboot" |
 // "off") opens that sheet once the page is first shown. The tablet host never sends it.
 import { Show, createEffect, createSignal, on, onCleanup } from "solid-js";
 import { Text, View } from "@pocketjs/framework/components";
@@ -179,6 +179,10 @@ export function SettingsPage(props: { active: () => boolean }) {
     setPending(id);
   };
   const close = () => setPending(null);
+  // restart ui isn't destructive (the UI is back in seconds): it runs at once, no sheet
+  const restartUi = () => {
+    if (can() && !pending()) ACTIONS.ui.run();
+  };
   const confirm = () => {
     const id = pending();
     if (!id) return; // the hidden sheet's buttons must never fire
@@ -216,7 +220,7 @@ export function SettingsPage(props: { active: () => boolean }) {
     const d = s() as (DeviceState & { previewSheet?: string }) | null;
     if (previewed || !d || !props.active()) return;
     previewed = true;
-    if (d.previewSheet && d.previewSheet in ACTIONS) ask(d.previewSheet as ActionId);
+    if (d.previewSheet && d.previewSheet !== "ui" && d.previewSheet in ACTIONS) ask(d.previewSheet as ActionId);
   });
 
   // ---- read-outs
@@ -271,7 +275,7 @@ export function SettingsPage(props: { active: () => boolean }) {
           </View>
           <View class="flex-row gap-[6]">
             <Btn label={ACTIONS.uboot.label} icon={ACTIONS.uboot.icon} grow onPress={() => ask("uboot")} />
-            <Btn label={ACTIONS.ui.label} icon={ACTIONS.ui.icon} grow onPress={() => ask("ui")} />
+            <Btn label={ACTIONS.ui.label} icon={ACTIONS.ui.icon} grow onPress={restartUi} />
           </View>
           <Btn label={ACTIONS.off.label} icon={ACTIONS.off.icon} kind="warn" onPress={() => ask("off")} />
         </View>
