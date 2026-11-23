@@ -260,7 +260,7 @@ export function SettingsPage(props: { active: () => boolean }) {
   const memTotal = () => s()?.memTotalMb ?? tab().memTotalMb;
 
   return (
-    <View class="relative flex-row" style={{ width: PW, height: PH, paddingL: PAD, paddingR: PAD, paddingT: PAD, gap: GAP }}>
+    <View class="relative flex-row" style={{ width: PW, height: PH, paddingL: PAD, paddingR: PAD, paddingT: PAD, paddingB: PAD, gap: GAP }}>
       {/* ---- touchable column ---- */}
       <View class="flex-col" style={{ width: LEFT_W }}>
         <Head title="POWER" right={() => unavailable() || " "} rightColor={() => C.wait} />
@@ -276,7 +276,7 @@ export function SettingsPage(props: { active: () => boolean }) {
           <Btn label={ACTIONS.off.label} icon={ACTIONS.off.icon} kind="warn" onPress={() => ask("off")} />
         </View>
 
-        <View style={{ height: 10 }} />
+        <View style={{ height: 8 }} />
         <Head title="DISPLAY" right={() => (s() ? `${Math.round(bShown() * 100)}%` : dash)} rightColor={() => accent()} />
         <View class="flex-row items-center" style={{ height: 26, opacity: can() ? 1 : 0.4 }}>
           <View class="items-center" style={{ width: 18, paddingR: 2 }}>
@@ -284,7 +284,7 @@ export function SettingsPage(props: { active: () => boolean }) {
           </View>
           <Slider
             x={PANE_X + SLIDER_X}
-            y={PANE_Y + PAD + 14 + 4 + 26 * 3 + 6 * 2 + 10 + 14 + 1}
+            y={PANE_Y + PAD + 14 + 4 + 26 * 3 + 6 * 2 + 8 + 14 + 1}
             w={SLIDER_W}
             value={bShown}
             onInput={(v) => setDragB(v)}
@@ -294,7 +294,7 @@ export function SettingsPage(props: { active: () => boolean }) {
         </View>
         <ToggleRow icon="moon" label="dim with host" note={hostNote} noteColor={hostColor} on={dimFollow} enabled={can} onChange={toggle("dim", "dim-follow-host")} />
 
-        <View style={{ height: 8 }} />
+        <View style={{ height: 6 }} />
         <Head title="NETWORK & BATTERY" />
         <ToggleRow
           icon={wifiOn() ? "wifi" : "wifi-off"}
@@ -350,7 +350,6 @@ export function SettingsPage(props: { active: () => boolean }) {
           <KV k="kern" kw={KW} v={s()?.kernel ? clip(s()!.kernel, 13) : dash} />
           <KV k="soc" kw={KW} v={s()?.socTempC != null ? `${s()!.socTempC} °C` : dash} color={(s()?.socTempC ?? 0) >= 70 ? C.wait : C.fg} />
           <KV k="cpu" kw={KW} v={(s()?.cpuMhz ?? tab().cpuMhz) != null ? `${s()?.cpuMhz ?? tab().cpuMhz} MHz` : dash} />
-          <KV k="touch" kw={KW} v={!s() ? dash : s()!.touchFiltersPaused || pending() ? "filters paused" : "filters on"} color={s()?.touchFiltersPaused || pending() ? C.wait : C.soft} />
           <KV k="free" kw={KW} v={memFree() != null ? `${memFree()}/${memTotal() ?? "?"} mb` : dash} />
         </TBox>
       </View>
