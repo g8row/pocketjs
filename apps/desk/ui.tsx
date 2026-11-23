@@ -285,7 +285,7 @@ export function Slider(props: {
   onChange: (v: number) => void;
   active: () => boolean;
 }) {
-  const H = 24; // touch band height around the 6 px track
+  const H = 28; // touch band height (the bar itself is one 12 px text row)
   const [drag, setDrag] = createSignal<number | null>(null);
   let held = false;
   const v = () => drag() ?? props.value();
@@ -318,8 +318,13 @@ export function Slider(props: {
   const n = () => Math.max(0, Math.min(cells, Math.round(v() * cells)));
   return (
     <View class="flex-row items-center" style={{ width: props.w, height: H }}>
-      <Text class="text-xs font-bold" style={{ textColor: drag() !== null ? C.fg : accent() }}>{"█".repeat(n()) || " "}</Text>
-      <Text class="text-xs font-bold" style={{ textColor: C.dim }}>{"░".repeat(cells - n()) || " "}</Text>
+      {/* an empty part is left out (a " " placeholder would push the bar one cell wider) */}
+      <Show when={n() > 0}>
+        <Text class="text-xs font-bold" style={{ textColor: drag() !== null ? C.fg : accent() }}>{"█".repeat(n())}</Text>
+      </Show>
+      <Show when={n() < cells}>
+        <Text class="text-xs font-bold" style={{ textColor: C.dim }}>{"░".repeat(cells - n())}</Text>
+      </Show>
     </View>
   );
 }
