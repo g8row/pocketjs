@@ -226,7 +226,7 @@ function blit() {
   const pixels = wasm.renderScaledIncremental(RENDER_SCALE);
   imageData.data.set(pixels);
   ctx.putImageData(imageData, 0, 0);
-  drawHud(ctx, FB_W, FB_H, hudFps, hudMem); // built-in on-canvas overlay
+  if (query.get("hud") !== "0") drawHud(ctx, FB_W, FB_H, hudFps, hudMem); // built-in on-canvas overlay (?hud=0: off, for screenshots)
 }
 
 function tick(now) {
@@ -260,6 +260,14 @@ function start() {
   last = performance.now();
   acc = 0;
   rafId = requestAnimationFrame(tick);
+}
+
+/** Headless/deterministic rendering: stop the rAF loop, step `n` virtual frames
+ *  (1/60 s each, no wall clock) and draw once. Used by apps/desk/preview. */
+export function runFrames(n) {
+  stop();
+  for (let i = 0; i < n; i++) safeFrame();
+  blit();
 }
 
 function stop() {
@@ -329,7 +337,7 @@ export async function mount(theCanvas, opts = {}) {
     height: LOGICAL_H,
     rasterDensity: RASTER_DENSITY,
   });
-  connectDevtools();
+  if (query.get("devtools") !== "0") connectDevtools(); // ?devtools=0: no DevTools socket (headless screenshots)
   logSink("PocketJS wasm ready");
 }
 
