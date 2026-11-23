@@ -2,9 +2,9 @@
 // All read-only → terminal frames (TBox) with ASCII charts; the one control is the rounded
 // today / 7d switch. Brief: apps/desk/DESIGN.md.
 //
-//   ┌ OUTPUT · TODAY ───── opus-5-5 ┐  ( today | 7d )
-//   │ 143.9k             41.2k last h│
-//   │ 39.3m read · 99% cached · 144  │
+//   ┌ OUTPUT · TODAY ───────────────┐  ( today | 7d )
+//   │ 143.9k               3 sessions│
+//   │ 39.3m read · 99% cached · 144  │  (model under sessions)
 //   ┌ BY HOUR ─────── peak 134.5k · 14h ┐   (7d: BY DAY, a bar per day, value on top)
 //   │ ▁ ▂ ▃ █ █ █ ▇ ▂ ...               │
 //   │ 0     6     12  now    18         │
@@ -66,7 +66,7 @@ const padL = (s: string, n: number) => (s.length >= n ? s : " ".repeat(n - s.len
 // ---- ASCII bar chart ----------------------------------------------------------------------
 // A chart is ROWS lines of mono text, drawn as three stacked layers so each can take its own
 // colour: `base` (dim baseline for empty columns), `bars` (accent) and `hot` (the highlighted
-// column, white) plus `note` (mute value labels above bars, 7d only). Every layer is a full grid
+// column, accent; the rest neutral) plus `note` (mute value labels above bars, 7d only). Every layer is a full grid
 // of spaces with its own characters, so the layers line up cell for cell.
 
 const ROWS = 4;
@@ -100,7 +100,7 @@ interface Chart {
 
 const join = (g: Grid) => g.map((r) => r.join("").replace(/\s+$/, "") || " ");
 
-/** 24 hourly bars, one cell each with a one-cell gap; the current hour in white with "now" under it. */
+/** 24 hourly bars, one cell each with a one-cell gap; the current hour in accent with "now" under it. */
 function hourChart(bars: number[], hour: number): Chart {
   const cols = 48;
   const base = grid(cols);
@@ -117,7 +117,7 @@ function hourChart(bars: number[], hour: number): Chart {
     drawBar(h === hour ? hot : bar, x, 1, level(v, max, ROWS));
   }
   if (hour >= 0 && hour < 24 && (bars[hour] ?? 0) <= 0) {
-    // the current hour with nothing yet: mark it in white on the baseline
+    // the current hour with nothing yet: mark it in accent on the baseline
     hot[ROWS - 1]![hour * 2] = "▁";
     base[ROWS - 1]![hour * 2] = " ";
   }
@@ -142,7 +142,7 @@ function hourChart(bars: number[], hour: number): Chart {
   return { base: join(base), bars: join(bar), hot: join(hot), note: join(grid(cols)), axis: line(axis), axisHot: line(axisHot) };
 }
 
-/** 7 daily bars, DAY_W cells per column (bar BAR_W wide), the value above each bar, today in white. */
+/** 7 daily bars, DAY_W cells per column (bar BAR_W wide), the value above each bar, today in accent. */
 const DAY_W = 7;
 const BAR_W = 4;
 function dayChart(days: { d: string; out: number }[]): Chart {
@@ -189,8 +189,8 @@ function AsciiChart(props: { chart: () => Chart; w: number }) {
         {(r) => (
           <View class="relative" style={{ width: props.w, height: ROW_H }}>
             {layer(() => props.chart().base[r]!, C.dim)}
-            {layer(() => props.chart().bars[r]!, accent)}
-            {layer(() => props.chart().hot[r]!, C.fg)}
+            {layer(() => props.chart().bars[r]!, C.soft)}
+            {layer(() => props.chart().hot[r]!, accent)}
             {layer(() => props.chart().note[r]!, C.mute)}
           </View>
         )}
@@ -298,7 +298,7 @@ export function UsagePage(props: { active: () => boolean }) {
   const headSide = (): [string, string] =>
     week()
       ? [`${short(weekTotal() / Math.max(1, days().length))}/day`, `${activeDays()} active days`]
-      : [`${short(tok(u().lastHour))} last h`, `${int(u().sessions)} ${int(u().sessions) === 1 ? "session" : "sessions"}`];
+      : [`${int(u().sessions)} ${int(u().sessions) === 1 ? "session" : "sessions"}`, model() ?? " "];
   const headLine = () => {
     if (week()) {
       const b = busiest();
@@ -326,7 +326,7 @@ export function UsagePage(props: { active: () => boolean }) {
     <View class="flex-col" style={{ width: PW, height: PH, gap: GAP, paddingL: M, paddingR: M, paddingT: M, paddingB: M }}>
       {/* headline + range switch */}
       <View class="flex-row items-start" style={{ gap: 10 }}>
-        <TBox title={headTitle()} right={model()} w={PW - 2 * M - 10 - SEG_W}>
+        <TBox title={headTitle()} w={PW - 2 * M - 10 - SEG_W}>
           <View class="flex-row items-end justify-between">
             <Text class="text-4xl leading-[38]" style={{ height: 38, textColor: idle() ? C.mute : accent() }}>
               {headNum()}
@@ -367,7 +367,7 @@ export function UsagePage(props: { active: () => boolean }) {
             </View>
           }
         >
-          <View class="flex-col" style={{ paddingT: 2 }}>
+          <View class="flex-col">
             <For each={projects()}>{(p, i) => <ProjectRow p={p} first={i() === 0} more={p.name.startsWith("+")} />}</For>
           </View>
         </Show>
