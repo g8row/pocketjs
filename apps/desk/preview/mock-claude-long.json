@@ -1,0 +1,763 @@
+{
+ "_comment": "Mock state for the deck app preview (apps/desk/preview/shot.ts). Keys other than _comment and device are deckd providers (desk.<key>); 'device' is the tablet's own state (device.ts). Structure captured from a live deckd on 2026-11-23, all text invented. Fields marked NEW in DESIGN.md are the redesign's contract (deckd/host implement them later).",
+ "layout": {
+  "panes": [
+   "board",
+   "deck",
+   "claude",
+   "usage",
+   "music",
+   "settings"
+  ],
+  "accent": "#a8c7fa",
+  "flash": true,
+  "approvals": true
+ },
+ "clock": {
+  "h": 14,
+  "m": 56,
+  "date": "mon 23 nov"
+ },
+ "focus": {
+  "mode": "paused",
+  "left": "24:58",
+  "progress": 0.0013333333333332975,
+  "total": 25,
+  "rounds": 0
+ },
+ "claude": {
+  "hooks": true,
+  "sessions": [
+   {
+    "id": "00000000-0000-4000-8000-000000000002",
+    "name": "desk-companion-monorepo",
+    "cwd": "~/src/dotfiles",
+    "state": "done",
+    "detail": "done",
+    "up": "1h",
+    "prompts": [
+     {
+      "text": "add a git alias for the last branch",
+      "at": "14:52"
+     }
+    ],
+    "tools": [
+     {
+      "tool": "Edit",
+      "summary": "Edit .gitconfig",
+      "at": "14:55",
+      "ms": "120",
+      "ok": "yes"
+     }
+    ],
+    "promptCount": 14,
+    "toolCount": 180,
+    "failCount": 0,
+    "top": "Edit .gitconfig",
+    "subagents": 2,
+    "permission": "",
+    "model": "opus-5-5",
+    "tokens": "84.2k in · 12.1k out",
+    "context": "90k",
+    "contextPct": 9,
+    "last": "Added `git last` to .gitconfig: it checks out the previous branch.",
+    "prompt": "redesign the claude page for 406 px: drop the terminal and open buttons, keep the reading mode, and make sure the long replies wrap properly instead of being clipped at the edge",
+    "reply": "Done. The page is laid out for 406 × 271 now.\n\n- The reply column is 240 px wide and the NOW card 140 px; both are terminal frames.\n- Long replies wrap with a pixel-accurate wrapper built from Geist's real advances (apps/desk/fonts/regular.ttf), so nothing runs past the frame.\n- A very long path like /home/someone/src/desk-companion/apps/desk/pages/claude-layers.tsx is hard-cut.\n\nWhat I didn't change: the toast and the permission sheet keep their behaviour; they are rounded and wait-yellow now.\n\nTests: `bun pocket compile` passes; screenshots of every state are in /tmp. Tap the reply to read it full width, drag to scroll, and use copy reply to put it on the clipboard.",
+    "now": {
+     "text": "done",
+     "sub": ""
+    },
+    "steps": [
+     {
+      "t": "Edit .gitconfig",
+      "fail": false
+     }
+    ],
+    "ctx": "90k / 1M",
+    "took": "4m 31s",
+    "changed": [
+     "pages/claude.tsx",
+     "pages/claude-lib.ts",
+     "pages/claude-layers.tsx",
+     "preview/mock-claude.json",
+     "DESIGN.md"
+    ],
+    "question": null,
+    "plan": null,
+    "held": null
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "name": "pocketdeck",
+    "cwd": "~/src/pocketdeck",
+    "state": "working",
+    "detail": "editing views.tsx",
+    "up": "1h",
+    "prompts": [
+     {
+      "text": "rework the board so it's machine agnostic",
+      "at": "14:52"
+     }
+    ],
+    "tools": [
+     {
+      "tool": "Read",
+      "summary": "Read deckconfig.ts",
+      "at": "14:55",
+      "ms": "120",
+      "ok": "yes"
+     },
+     {
+      "tool": "Edit",
+      "summary": "Edit views.tsx",
+      "at": "14:55",
+      "ms": "120",
+      "ok": "yes"
+     },
+     {
+      "tool": "Bash",
+      "summary": "Bash bun test",
+      "at": "14:55",
+      "ms": "120",
+      "ok": "yes"
+     }
+    ],
+    "promptCount": 13,
+    "toolCount": 160,
+    "failCount": 0,
+    "top": "Read deckconfig.ts",
+    "subagents": 1,
+    "permission": "",
+    "model": "opus-5-5",
+    "tokens": "84.2k in · 12.1k out",
+    "context": "280k",
+    "contextPct": 28,
+    "last": "Done. The board reads the host's OS from deckd, so the labels say \"linux cpu\" here and \"mac cpu\" on a Mac. The claude and now-playing cells are gone, and the grid scales to the 406 px pane.",
+    "prompt": "rework the board so it's machine agnostic",
+    "reply": "Done. The board reads the host's OS from deckd, so the labels say \"linux cpu\" here and \"mac cpu\" on a Mac. The claude and now-playing cells are gone, and the grid scales to the 406 px pane.",
+    "now": {
+     "text": "editing views.tsx",
+     "sub": "Edit views.tsx (+42 −18)"
+    },
+    "steps": [
+     {
+      "t": "Read deckconfig.ts",
+      "fail": false
+     },
+     {
+      "t": "Edit views.tsx",
+      "fail": false
+     },
+     {
+      "t": "Bash bun test",
+      "fail": false
+     }
+    ],
+    "ctx": "280k / 1M",
+    "took": "",
+    "changed": [
+     "views.tsx"
+    ],
+    "question": null,
+    "plan": null,
+    "held": null
+   },
+   {
+    "id": "x5",
+    "name": "site",
+    "cwd": "~/src/pocketdeck",
+    "state": "working",
+    "detail": "editing views.tsx",
+    "up": "1h",
+    "prompts": [
+     {
+      "text": "rework the board so it's machine agnostic",
+      "at": "14:52"
+     }
+    ],
+    "tools": [
+     {
+      "tool": "Read",
+      "summary": "Read deckconfig.ts",
+      "at": "14:55",
+      "ms": "120",
+      "ok": "yes"
+     },
+     {
+      "tool": "Edit",
+      "summary": "Edit views.tsx",
+      "at": "14:55",
+      "ms": "120",
+      "ok": "yes"
+     },
+     {
+      "tool": "Bash",
+      "summary": "Bash bun test",
+      "at": "14:55",
+      "ms": "120",
+      "ok": "yes"
+     }
+    ],
+    "promptCount": 13,
+    "toolCount": 160,
+    "failCount": 0,
+    "top": "Read deckconfig.ts",
+    "subagents": 1,
+    "permission": "",
+    "model": "opus-5-5",
+    "tokens": "84.2k in · 12.1k out",
+    "context": "280k",
+    "contextPct": 28,
+    "last": "Done. The board reads the host's OS from deckd, so the labels say \"linux cpu\" here and \"mac cpu\" on a Mac. The claude and now-playing cells are gone, and the grid scales to the 406 px pane.",
+    "prompt": "rework the board so it's machine agnostic",
+    "reply": "Done. The board reads the host's OS from deckd, so the labels say \"linux cpu\" here and \"mac cpu\" on a Mac. The claude and now-playing cells are gone, and the grid scales to the 406 px pane.",
+    "now": {
+     "text": "editing views.tsx",
+     "sub": "Edit views.tsx (+42 −18)"
+    },
+    "steps": [
+     {
+      "t": "Read deckconfig.ts",
+      "fail": false
+     },
+     {
+      "t": "Edit views.tsx",
+      "fail": false
+     },
+     {
+      "t": "Bash bun test",
+      "fail": false
+     }
+    ],
+    "ctx": "280k / 1M",
+    "took": "",
+    "changed": [
+     "views.tsx"
+    ],
+    "question": null,
+    "plan": null,
+    "held": null
+   },
+   {
+    "id": "x6",
+    "name": "notes",
+    "cwd": "~/src/dotfiles",
+    "state": "idle",
+    "detail": "done",
+    "up": "1h",
+    "prompts": [
+     {
+      "text": "add a git alias for the last branch",
+      "at": "14:52"
+     }
+    ],
+    "tools": [
+     {
+      "tool": "Edit",
+      "summary": "Edit .gitconfig",
+      "at": "14:55",
+      "ms": "120",
+      "ok": "yes"
+     }
+    ],
+    "promptCount": 14,
+    "toolCount": 180,
+    "failCount": 0,
+    "top": "Edit .gitconfig",
+    "subagents": 2,
+    "permission": "",
+    "model": "opus-5-5",
+    "tokens": "84.2k in · 12.1k out",
+    "context": "90k",
+    "contextPct": 9,
+    "last": "Added `git last` to .gitconfig: it checks out the previous branch.",
+    "prompt": "add a git alias for the last branch",
+    "reply": "Added `git last` to .gitconfig: it checks out the previous branch.",
+    "now": {
+     "text": "done",
+     "sub": ""
+    },
+    "steps": [
+     {
+      "t": "Edit .gitconfig",
+      "fail": false
+     }
+    ],
+    "ctx": "90k / 1M",
+    "took": "",
+    "changed": [
+     "views.tsx"
+    ],
+    "question": null,
+    "plan": null,
+    "held": null
+   }
+  ],
+  "counts": {
+   "waiting": 1,
+   "working": 1,
+   "done": 1,
+   "idle": 0
+  },
+  "alert": {
+   "seq": 0,
+   "session": "",
+   "name": "",
+   "reason": "",
+   "at": ""
+  },
+  "pending": null
+ },
+ "claudeTick": {
+  "ago": {
+   "00000000-0000-4000-8000-000000000002": "40s"
+  },
+  "left": null,
+  "held": {},
+  "run": {
+   "00000000-0000-4000-8000-000000000001": "2m 12s"
+  }
+ },
+ "usage": {
+  "hour": 14,
+  "bars": [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   1,
+   3,
+   2,
+   5,
+   8,
+   6,
+   9,
+   12,
+   4,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  "peak": "134.5k",
+  "output": "143.9k",
+  "input": "39.32m",
+  "cacheHit": 99,
+  "messages": 144,
+  "sessions": 3,
+  "lastHour": "41.2k",
+  "projects": [
+   {
+    "name": "pocketdeck",
+    "out": "128.2k",
+    "pct": 89
+   },
+   {
+    "name": "dotfiles",
+    "out": "11.0k",
+    "pct": 8
+   },
+   {
+    "name": "api",
+    "out": "4.7k",
+    "pct": 3
+   }
+  ],
+  "model": "opus-5-5",
+  "days": [
+   {
+    "d": "tue",
+    "out": 98000
+   },
+   {
+    "d": "wed",
+    "out": 143000
+   },
+   {
+    "d": "thu",
+    "out": 61000
+   },
+   {
+    "d": "fri",
+    "out": 210000
+   },
+   {
+    "d": "sat",
+    "out": 12000
+   },
+   {
+    "d": "sun",
+    "out": 0
+   },
+   {
+    "d": "mon",
+    "out": 143900
+   }
+  ]
+ },
+ "music": {
+  "state": "playing",
+  "title": "windowlicker",
+  "artist": "aphex twin",
+  "album": "windowlicker ep",
+  "position": 161,
+  "duration": 367,
+  "player": "spotify",
+  "shuffle": false,
+  "repeat": "all",
+  "volume": 62
+ },
+ "deck": {
+  "tiles": [
+   {
+    "id": "vol.up",
+    "label": "Vol +",
+    "color": "zinc",
+    "icon": "vol-up",
+    "group": "volume",
+    "h": 3,
+    "level": 71,
+    "kind": "action"
+   },
+   {
+    "id": "vol.down",
+    "label": "Vol −",
+    "color": "zinc",
+    "icon": "vol-down",
+    "group": "volume",
+    "level": 71,
+    "kind": "action"
+   },
+   {
+    "id": "mic.toggle",
+    "label": "Mic",
+    "color": "rose",
+    "icon": "mic",
+    "iconOn": "mic-off",
+    "h": 2,
+    "shape": "circle",
+    "sub": "live",
+    "on": false,
+    "kind": "action"
+   },
+   {
+    "id": "open.claude",
+    "label": "Claude",
+    "color": "amber",
+    "icon": "spark",
+    "w": 2,
+    "kind": "action"
+   },
+   {
+    "id": "open.terminal",
+    "label": "Terminal",
+    "color": "blue",
+    "icon": "terminal",
+    "kind": "action"
+   },
+   {
+    "id": "screenshot",
+    "label": "Screenshot",
+    "color": "emerald",
+    "icon": "screenshot",
+    "kind": "action"
+   },
+   {
+    "id": "focus.toggle",
+    "label": "Focus",
+    "color": "blue",
+    "icon": "timer",
+    "fill": true,
+    "kind": "action",
+    "live": "focus"
+   },
+   {
+    "id": "lock",
+    "label": "Lock",
+    "color": "violet",
+    "icon": "lock",
+    "group": "away",
+    "fill": true,
+    "kind": "action"
+   },
+   {
+    "id": "display.sleep",
+    "label": "Sleep display",
+    "color": "zinc",
+    "icon": "display",
+    "group": "away",
+    "kind": "action"
+   },
+   {
+    "id": "caffeine.toggle",
+    "label": "Caffeine",
+    "color": "latte",
+    "icon": "cup",
+    "sub": "awake",
+    "on": true,
+    "kind": "action"
+   }
+  ]
+ },
+ "sys": {
+  "cpu": 12,
+  "mem": 64,
+  "cores": 8,
+  "ghz": 3.4,
+  "memUsedGb": 10.1,
+  "memTotalGb": 15.6,
+  "hist": {
+   "cpu": {
+    "1m": [
+     14,
+     21,
+     21,
+     19,
+     21,
+     22,
+     16,
+     8,
+     7,
+     9,
+     7,
+     5,
+     11,
+     19,
+     20,
+     18,
+     21,
+     23,
+     18,
+     10,
+     8,
+     10,
+     7,
+     4,
+     8,
+     16,
+     19,
+     18,
+     20,
+     24
+    ],
+    "10m": [
+     28,
+     33,
+     35,
+     31,
+     25,
+     20,
+     19,
+     20,
+     19,
+     16,
+     10,
+     4,
+     1,
+     4,
+     10,
+     14,
+     16,
+     15,
+     15,
+     18,
+     25,
+     31,
+     34,
+     33,
+     28,
+     23,
+     21,
+     22,
+     22,
+     19
+    ],
+    "1h": [
+     36,
+     38,
+     38,
+     35,
+     31,
+     24,
+     18,
+     13,
+     10,
+     9,
+     10,
+     12,
+     13,
+     13,
+     11,
+     8,
+     6,
+     5,
+     7,
+     11,
+     17,
+     23,
+     29,
+     33,
+     34,
+     33,
+     32,
+     30,
+     31,
+     32
+    ]
+   },
+   "mem": {
+    "1m": [
+     64,
+     65,
+     65,
+     65,
+     65,
+     65,
+     65,
+     65,
+     64,
+     63,
+     63,
+     63,
+     63,
+     63,
+     63,
+     64,
+     64,
+     65,
+     65,
+     65,
+     65,
+     65,
+     65,
+     64,
+     63,
+     63,
+     63,
+     63,
+     63,
+     63
+    ],
+    "10m": [
+     65,
+     65,
+     66,
+     66,
+     66,
+     65,
+     64,
+     63,
+     62,
+     62,
+     62,
+     62,
+     62,
+     62,
+     61,
+     60,
+     59,
+     58,
+     58,
+     58,
+     59,
+     60,
+     61,
+     61,
+     61,
+     61,
+     61,
+     61,
+     62,
+     63
+    ],
+    "1h": [
+     63,
+     64,
+     64,
+     64,
+     63,
+     62,
+     60,
+     58,
+     56,
+     55,
+     53,
+     53,
+     53,
+     53,
+     54,
+     54,
+     54,
+     54,
+     54,
+     53,
+     53,
+     52,
+     51,
+     51,
+     52,
+     53,
+     55,
+     57,
+     59,
+     60
+    ]
+   }
+  }
+ },
+ "host": {
+  "os": "linux",
+  "name": "workstation",
+  "screen": "active"
+ },
+ "tablet": {
+  "battery": 76,
+  "charging": true,
+  "memFreeMb": 725,
+  "memTotalMb": 861,
+  "uptime": "3h 12m",
+  "cpuMhz": 1092,
+  "mode": "linux",
+  "tempC": 31,
+  "volts": 4.02,
+  "currentMa": 420
+ },
+ "device": {
+  "state": {
+   "brightness": 200,
+   "dimFollowHost": true,
+   "wifi": {
+    "on": true,
+    "ssid": "home-2g",
+    "ip": "10.0.0.15",
+    "rssi": -61
+   },
+   "usbIp": "172.16.42.1",
+   "battery": {
+    "pct": 76,
+    "charging": true,
+    "tempC": 31,
+    "currentMa": 420,
+    "volts": 4.02,
+    "chargeLimit": true
+   },
+   "slot": "b",
+   "fallbackSlot": "a",
+   "build": "ae95761",
+   "kernel": "7.0.10",
+   "uptime": "3h 12m",
+   "socTempC": 44,
+   "cpuMhz": 1092,
+   "memFreeMb": 725,
+   "memTotalMb": 861,
+   "touchFiltersPaused": false
+  }
+ }
+}
