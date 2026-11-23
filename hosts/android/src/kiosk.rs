@@ -36,6 +36,9 @@
 //! POCKETJS_POWER=exit|ignore, POCKETJS_KIOSK_VT=0 (leave the VT alone),
 //! POCKETJS_LINK=host:port. Bundle dir: argv[1].
 //!
+//! Linux host only: the `device` global (src/device.rs: tablet state + whitelisted commands for the SETTINGS
+//! page); its `touch-filters` command pauses the mask/learn/stale filters above for up to 60 s.
+//!
 //! Same incremental raster as the activity host: an idle frame touches no
 //! pixels and issues no pan.
 
@@ -53,6 +56,19 @@ use pocketjs_core::spec::{btn, ANALOG_CENTER};
 use pocketjs_core::{raster, Ui};
 
 mod kiosk_drm;
+#[cfg(target_os = "linux")]
+mod device;
+
+/// Touch filters (mask, learn, stale) bypassed: `device.run("touch-filters", {paused: true})` while a confirm
+/// sheet is up (Linux host only; it expires on its own).
+#[cfg(target_os = "linux")]
+fn filters_paused() -> bool {
+    device::touch_filters_paused()
+}
+#[cfg(not(target_os = "linux"))]
+fn filters_paused() -> bool {
+    false
+}
 
 const HOST_ID: &str = "android";
 /// Bundle directory when argv[1] is not given.
@@ -823,8 +839,9 @@ impl Touch {
                         if self.fresh[s] {
                             self.fresh[s] = false;
                             self.track[s] = (x, y, x, y, x, y, Instant::now());
-                            self.masked[s] = self.mask.iter().any(|m| x >= m[0] && y >= m[1] && x <= m[2] && y <= m[3])
-                                || self.cell_hot(x, y);
+                            self.masked[s] = !filters_paused()
+                                && (self.mask.iter().any(|m| x >= m[0] && y >= m[1] && x <= m[2] && y <= m[3])
+                                    || self.cell_hot(x, y));
                             if self.masked[s] {
                                 self.dropped += 1;
                             }
@@ -876,7 +893,7 @@ impl Touch {
     /// hot while its phantoms continue). Long holds are left to the stale rule.
     fn learn_lift(&mut self, s: usize) {
         let (x0, y0, nx, ny, mx, my, t) = self.track[s];
-        if self.learn && mx - nx <= STALE_RADIUS && my - ny <= STALE_RADIUS && t.elapsed() <= Duration::from_millis(1500) {
+        if self.learn && !filters_paused() && mx - nx <= STALE_RADIUS && my - ny <= STALE_RADIUS && t.elapsed() <= Duration::from_millis(1500) {
             if let Some(i) = self.cell_index(x0, y0) {
                 self.cell_update(i, 1.0);
             }
@@ -886,7 +903,7 @@ impl Touch {
     /// Retire contacts that have not moved for `stale_after` (checked every frame: a contact that stays still
     /// sends no events at all), and log the mask/stale counters at most once a minute.
     fn log_dropped(&mut self) {
-        if let Some(after) = self.stale_after {
+        if let Some(after) = self.stale_after.filter(|_| !filters_paused()) {
             for s in 0..10 {
                 if self.slots[s].0 >= 0 && !self.retired[s] && !self.masked[s] && !self.fresh[s] && self.anchor[s].2.elapsed() >= after {
                     self.retired[s] = true;
@@ -938,11 +955,13 @@ impl Touch {
                 Vec::new()
             };
         }
+        // paused filters: contacts masked or retired before the pause count again too
+        let paused = filters_paused();
         let mt: Vec<_> = self
             .slots
             .iter()
             .enumerate()
-            .filter(|&(i, s)| s.0 >= 0 && !self.masked[i] && !self.fresh[i] && !self.retired[i])
+            .filter(|&(i, s)| s.0 >= 0 && !self.fresh[i] && (paused || (!self.masked[i] && !self.retired[i])))
             .map(|(_, &(id, x, y))| (id as u32 & 0xff, nx(x), ny(y)))
             .collect();
         if !mt.is_empty() {
@@ -1038,6 +1057,8 @@ fn boot(js: &[u8], pak: &[u8], vp: (u32, u32), link: &Link) -> Result<Rt> {
     let guest = Guest::new()?;
     surface.mount(&guest)?;
     link.mount(&guest)?;
+    #[cfg(target_os = "linux")]
+    device::mount(&guest)?;
     guest.eval("app", std::str::from_utf8(js)?)?;
     anyhow::ensure!(guest.has_frame(), "bundle has no frame()");
     Ok(Rt { guest, surface })
@@ -1208,6 +1229,8 @@ fn main() -> Result<()> {
     let dir = std::env::args().nth(1).unwrap_or_else(|| DEFAULT_DIR.into());
     let (mut js, mut pak, mut vp) = load(&dir)?;
     let link = Link::start(hello(&js, &pak, vp));
+    #[cfg(target_os = "linux")]
+    device::start();
     let mut rt = boot(&js, &pak, vp, &link)?;
     let _vt = Vt::graphics();
     let mut fb = Fb::open()?;

@@ -9,17 +9,22 @@
 //     "reboot"          { target: "linux" | "android" | "android-direct" | "uboot" | "bootloader" }  (tb-reboot)
 //     "poweroff"        {}
 //     "restart-ui"      {}                                     (rc-service pocketdeck-ui restart)
-//     "brightness"      { value: 0..255 }                      (/sys/class/backlight/backlight)
+//     "brightness"      { value: 0..255, transient?: boolean }  (/sys/class/backlight/backlight; saved as the
+//                                                               user's brightness unless transient: host dimming)
 //     "wifi"            { on: boolean }                         (wifi-up / wifi-up off)
 //     "charge-limit"    { on: boolean }                         (SM5414 CV 4.10 V on / 4.35 V off)
 //     "dim-follow-host" { on: boolean }                         (dim/off while the host is locked/asleep)
-//     "touch-filters"   { paused: boolean }                     (pause mask/learn/stale while a confirm sheet is up)
+//     "touch-filters"   { paused: boolean }                     (pause mask/learn/stale while a confirm sheet is up;
+//                                                               the host resumes them on its own after 60 s)
+//   Unknown commands or bad arguments → { ok: false, out: "<reason>" }.
 
-import { createSignal } from "solid-js";
+import { createEffect, createSignal, on } from "solid-js";
 import { onFrame } from "@pocketjs/framework/lifecycle";
+import { desk } from "./link.ts";
 
 export interface DeviceState {
-  brightness: number; // 0..255
+  brightness: number; // 0..255, what the backlight shows now
+  savedBrightness: number | null; // the user's brightness (persisted; host dimming restores it)
   dimFollowHost: boolean;
   wifi: { on: boolean; ssid: string | null; ip: string | null; rssi: number | null };
   usbIp: string;
@@ -73,4 +78,47 @@ export function useDevice(active: () => boolean): () => DeviceState | null {
     setState(read());
   });
   return state;
+}
+
+/** Backlight while the host is locked (~10 %) / asleep. */
+const DIM_LOCKED = 26;
+const DIM_ASLEEP = 0;
+
+/**
+ * Dimming that follows the host (call once, from Desk()): while the device's `dimFollowHost` is on, deskd's
+ * `desk.host.screen` going "locked" dims the backlight to ~10 %, "asleep" turns it off, and "active" restores
+ * the user's saved brightness. It acts only when the host state changes (or when the setting is turned off
+ * while dimmed), so the brightness slider always wins in between; dims are transient (never saved). No host
+ * data or no device channel: nothing happens.
+ */
+export function useHostDimming(): void {
+  if (!native) return;
+  const st = useDevice(() => true);
+  const screen = (): string | undefined => {
+    const s = desk.host?.screen;
+    return s === "active" || s === "locked" || s === "asleep" ? s : undefined;
+  };
+  const follow = () => st()?.dimFollowHost ?? false;
+  let dimmed = false;
+  const restore = () => {
+    const saved = st()?.savedBrightness;
+    dimmed = false;
+    if (saved != null) runDevice("brightness", { value: saved, transient: true });
+  };
+  createEffect(
+    on(screen, (s, prev) => {
+      if (!s || s === prev || !follow()) return;
+      if (s === "active") {
+        if (dimmed) restore();
+        return;
+      }
+      if (runDevice("brightness", { value: s === "locked" ? DIM_LOCKED : DIM_ASLEEP, transient: true })) dimmed = true;
+    }),
+  );
+  // turning the setting off while dimmed gives the brightness back
+  createEffect(
+    on(follow, (f) => {
+      if (!f && dimmed) restore();
+    }, { defer: true }),
+  );
 }

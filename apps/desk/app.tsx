@@ -22,6 +22,7 @@ import { AttentionLayer, ClaudePage, PermissionSheet } from "./pages/claude.tsx"
 import { UsagePage } from "./pages/usage.tsx";
 import { MusicPage } from "./pages/music.tsx";
 import { SettingsPage } from "./pages/settings.tsx";
+import { useHostDimming } from "./device.ts";
 
 // The tablet's cracked glass reports phantom contacts (most are masked out by
 // the PocketJS host, POCKETJS_TOUCH_MASK). A press held over 1 s fires nothing,
@@ -116,6 +117,7 @@ function Shell(props: { panes: string[] }) {
 export default function Desk() {
   useLink();
   useDecorClock();
+  useHostDimming();
   const key = createMemo(() => {
     // A layout from before the redesign (home/pulse/focus/system) gets the new default order.
     const raw = (desk.layout?.panes ?? DEFAULT_PANES) as string[];
