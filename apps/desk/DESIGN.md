@@ -32,8 +32,9 @@ every page; each page agent also gets a page brief.
 - Look at the agreed mock-up: `preview/mixed-style.html` (open in a browser; the code is the spec for spacing and
   feel, not pixel-exact). Match its density: 8–10 px gaps, 7 px frame padding, xs (12 px) mono labels.
 - Lowercase prose and values; UPPERCASE only for frame titles and tab labels.
-- **Machine-agnostic**: never write "mac". The host is named by its OS: `desk.host.os` ("linux" | "macos" |
-  "windows"), e.g. "LINUX CPU", "on linux". Icons for the OS: `linux`, `apple`, `windows`.
+- **Machine-agnostic**: never hard-code the host's OS. Name it from `desk.host.os` ("linux" | "macos" | "windows")
+  with these labels: linux → "linux", macos → "mac", windows → "windows" (e.g. "LINUX CPU", "MAC CPU", "on mac").
+  Icons for the OS: `linux`, `apple`, `windows`.
 
 ## 3. The kit (`ui.tsx`) and icons (`nf.ts`)
 
