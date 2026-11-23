@@ -252,21 +252,21 @@ export function Seg(props: { options: string[]; value: () => string; onChange: (
 }
 
 /** Terminal-style on/off box (user decision: rectangular, not a knob switch). On = accent fill with a dark
- *  "on", off = 1 px frame with a mute "off". The touch band (44 × 26) is larger than the drawn box (40 × 20). */
+ *  "on", off = 1 px frame with a mute "off". The touch band (36 × 26) is larger than the drawn box (32 × 20). */
 export function Toggle(props: { on: () => boolean; onChange: (v: boolean) => void }) {
   let n: NodeMirror | undefined;
   return (
     <View
       ref={(x: NodeMirror) => (n = x)}
       class="items-center justify-center"
-      style={{ width: 44, height: 26 }}
+      style={{ width: 36, height: 26 }}
       focusable
       onPress={() => {
         squish(n, 0.94);
         props.onChange(!props.on());
       }}
     >
-      <View class="border items-center justify-center" style={{ width: 40, height: 20, borderColor: props.on() ? accent() : C.frame, bgColor: props.on() ? accent() : "#00000000" }}>
+      <View class="border items-center justify-center" style={{ width: 32, height: 20, borderColor: props.on() ? accent() : C.frame, bgColor: props.on() ? accent() : "#00000000" }}>
         <Text class="text-xs font-bold" style={{ textColor: props.on() ? ON_ACCENT : C.mute }}>{props.on() ? "on" : "off"}</Text>
       </View>
     </View>
