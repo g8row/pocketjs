@@ -1,2 +1,5 @@
-regular.ttf = Geist Regular, bold.ttf = Geist Mono Regular (v1.9.2, vercel/geist-font, SIL OFL 1.1 — see OFL.txt).
-The Desk app uses the "bold" slot as its monospace face (eyebrows, numbers, ASCII field).
+regular.ttf = Geist Regular (v1.9.2, vercel/geist-font, SIL OFL 1.1 — see OFL.txt).
+bold.otf    = GeistMono Nerd Font Mono Regular (Nerd Fonts v3.5.1, Geist Mono 1.7 + Nerd Font icon glyphs;
+              Geist Mono under OFL 1.1, the patched icon sets under their own licenses — see LICENSE-nerd-fonts.txt).
+The Desk app uses the "bold" slot as its monospace face (eyebrows, numbers, ASCII field) and for icons:
+nf.ts maps icon names to Nerd Font codepoints (one cell wide in the Mono build, tinted like text).
