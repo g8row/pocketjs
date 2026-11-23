@@ -16,10 +16,9 @@
 
 import { For, Show, createMemo } from "solid-js";
 import { Text, View, type NodeMirror } from "@pocketjs/framework/components";
-import { jump, spring } from "@pocketjs/framework/animation";
 import { act, desk } from "../link.ts";
 import { TILE_HEX, accent } from "../theme.ts";
-import { C, Icon, PH, PW, TBox } from "../ui.tsx";
+import { C, Icon, PH, PW, TBox, squish } from "../ui.tsx";
 
 type Active = () => boolean;
 type Tile = any;
@@ -140,10 +139,7 @@ function Press(props: { id: string; style: Record<string, number | string>; row?
       style={props.style}
       focusable
       onPress={() => {
-        if (n) {
-          jump(n, "scale", 0.93);
-          spring(n, "scale", 1);
-        }
+        squish(n, 0.93);
         act(props.id);
       }}
     >
@@ -256,8 +252,10 @@ function SplitPill(props: { tiles: Tile[]; b: Box }) {
 function Circle(props: { t: Tile; b: Box }) {
   const d = (Math.min(props.b.w, props.b.h) - 4) & ~1; // even → whole-px radius
   const on = () => isOn(props.t);
-  const p = () => paint(props.t, on());
-  const word = () => clip(lower(props.t.sub || props.t.label) || " ", Math.floor((d - 30) / 7));
+  // the mic is a warning both ways, whatever its tile colour: green = live (on air), rose = muted
+  const mic = () => props.t.icon === "mic" || props.t.iconOn === "mic-off";
+  const p = () => (mic() ? paint({ color: on() ? "rose" : "emerald" }, true) : paint(props.t, on()));
+  const word = () => clip((mic() ? (on() ? "muted" : "live") : lower(props.t.sub || props.t.label)) || " ", Math.floor((d - 30) / 7));
   return (
     <Press
       id={props.t.id}
@@ -277,7 +275,7 @@ function Circle(props: { t: Tile; b: Box }) {
           <Icon name={iconOf(props.t)} size={d >= 90 ? "4xl" : "2xl"} color={p().ink} />
         </Show>
         <View class="flex-row items-center gap-[5]">
-          <Text class="text-xs font-bold" style={{ textColor: on() ? p().ink : C.soft }}>●</Text>
+          <Text class="text-xs font-bold" style={{ textColor: on() || mic() ? p().ink : C.soft }}>●</Text>
           <Text class="text-xs font-bold" style={{ textColor: p().note }}>{word()}</Text>
         </View>
       </View>
