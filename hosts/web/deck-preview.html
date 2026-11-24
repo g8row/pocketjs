@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>deck preview</title>
+<style>html, body { margin: 0; background: #000; overflow: hidden; } canvas { display: block; image-rendering: pixelated; }</style>
+</head>
+<body>
+<canvas id="screen"></canvas>
+<script type="module">
+  // Headless preview of the deck app (apps/desk) with mock deckd state; used by
+  // apps/desk/preview/shot.ts. Query: ?demo=desk-main&width=512&height=300&scale=2&pane=<id>
+  // The mock (dist/deck-mock.json) is fed through a fake `link` global exactly as deckd's
+  // JSON lines arrive on the tablet; `device` mocks the tablet command channel (device.ts).
+  import { mount, load, runFrames } from "./engine.js";
+  const q = new URLSearchParams(location.search);
+  const mock = await (await fetch("dist/deck-mock.json", { cache: "no-store" })).json();
+  const lines = Object.entries(mock).filter(([k]) => !k.startsWith("_") && k !== "device").map(([k, v]) => JSON.stringify({ t: "state", k, v }));
+  const pane = q.get("pane");
+  if (pane) lines.push(JSON.stringify({ t: "state", k: "nav", v: { seq: 1, pane } }));
+  let pending = lines;
+  const sent = [];
+  globalThis.link = {
+    poll() { const out = pending; pending = []; return out; },
+    send(m) { sent.push(m); return true; },
+    connected() { return true; },
+    blob() { return undefined; },
+  };
+  const dev = mock.device ?? {};
+  globalThis.device = {
+    read(key) { return dev[key] ?? null; },
+    run(cmd, args) { sent.push(JSON.stringify({ device: cmd, args })); return { ok: true, out: "" }; },
+  };
+  globalThis.__previewSent = sent;
+  await mount(document.getElementById("screen"), { onLog: (m) => console.log(m) });
+  const err = await load(q.get("demo") ?? "desk-main");
+  // ?frames=N: step N frames deterministically (no rAF) so slides/springs have settled, then stop.
+  if (!err && q.get("frames")) runFrames(Number(q.get("frames")));
+  document.title = err ? "error" : "ready";
+</script>
+</body>
+</html>

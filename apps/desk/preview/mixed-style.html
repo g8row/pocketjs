@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PocketDeck mixed style</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  @font-face { font-family: NF; src: url("https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.2.1/patched-fonts/NerdFontsSymbolsOnly/SymbolsNerdFontMono-Regular.ttf") format("truetype"); }
+  :root { --ground:#070707; --bg:#0a0a0a; --c:#141414; --c2:#1d1d1d; --line:#222; --line2:#363636; --frame:#3a3a3a; --mute:#8a8a8a;
+          --soft:#b3b3b3; --fg:#ededed; --acc:#a8c7fa; --wait:#ffd27a; --ok:#9ee6c3; --rose:#ffb4a8; --latte:#f2c9a0; --violet:#d0bcff; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #1b1b1b; color: #ddd; font: 14px/1.4 Geist, system-ui, sans-serif; padding: 24px 16px 60px; }
+  h1 { font: 500 20px Geist; margin-bottom: 4px; } p.lead { color: #999; margin-bottom: 20px; max-width: 1180px; }
+  .rule { display: inline-block; margin: 0 4px; padding: 0 6px; border-radius: 4px; background: #262626; font: 12px 'Geist Mono'; }
+  .row { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 26px; align-items: flex-start; }
+  .col h2 { font: 500 13px 'Geist Mono'; color: #aaa; margin-bottom: 8px; letter-spacing: .04em; text-transform: uppercase; }
+  .col .note { color: #888; font-size: 12px; margin-top: 6px; max-width: 768px; }
+  .frame { width: 768px; height: 450px; border-radius: 10px; background: #000; box-shadow: 0 0 0 10px #050505, 0 8px 30px #0008; overflow: hidden; }
+  .screen { width: 512px; height: 300px; transform: scale(1.5); transform-origin: 0 0; background: var(--ground); display: flex; position: relative; overflow: hidden; color: var(--fg); }
+  .nf { font-family: NF; font-style: normal; line-height: 1; }
+  .mono { font-family: 'Geist Mono'; } .mute { color: var(--mute); } .soft { color: var(--soft); } .acc { color: var(--acc); } .wait { color: var(--wait); } .ok { color: var(--ok); } .rose { color: var(--rose); }
+  .xs { font-size: 10px; } .sm { font-size: 12px; } .base { font-size: 14px; } .lg { font-size: 18px; } .xl { font-size: 22px; } .x2 { font-size: 26px; } .x3 { font-size: 34px; }
+  /* rail */
+  .rail { width: 106px; height: 300px; position: relative; flex: none; }
+  .rail .pocket { position: absolute; left: 4px; top: 76px; width: 48px; font-family: 'Geist Mono'; }
+  .rail .h { font: 400 36px/38px Geist; color: var(--acc); } .rail .m { font: 400 36px/38px Geist; }
+  .rail .d { font: 14px Geist; margin-top: 4px; } .rail .d2 { font: 14px Geist; color: var(--soft); }
+  .rail .s { font-size: 12px; color: var(--mute); margin-top: 6px; } .rail .s2 { font-size: 12px; color: var(--soft); }
+  .wave { position: absolute; left: 56px; top: 0; width: 50px; font: 12px/10px 'Geist Mono'; white-space: pre; color: #6a6a6a; }
+  .wave b { color: var(--acc); font-weight: 400; }
+  .dmg { position: absolute; background: #000; opacity: .85; } .crack { position: absolute; height: 1px; background: #9ab; transform-origin: 0 0; opacity: .6; }
+  .main { width: 406px; height: 300px; display: flex; flex-direction: column; }
+  .nav { height: 28px; display: flex; gap: 1px; background: var(--line); border-bottom: 1px solid var(--line); flex: none; }
+  .nav span { flex: 1; display: flex; align-items: center; justify-content: center; background: var(--bg); font: 500 10px 'Geist Mono'; color: var(--mute); letter-spacing: .05em; position: relative; }
+  .nav span.on { background: var(--c); color: #fff; } .nav span.on::after { content: ''; position: absolute; bottom: 0; width: 16px; height: 2px; background: var(--acc); border-radius: 1px; }
+  .pane { flex: 1; position: relative; overflow: hidden; padding: 9px 8px 8px; }
+
+  /* READ-ONLY = terminal: square frame, title in the border, mono, ASCII bars */
+  .box { border: 1px solid var(--frame); position: relative; padding: 8px 7px 6px; font-family: 'Geist Mono'; }
+  .box > .ttl { position: absolute; top: -7px; left: 6px; background: var(--ground); padding: 0 4px; font-size: 10px; color: var(--mute); letter-spacing: .05em; }
+  .box > .ttr { position: absolute; top: -7px; right: 6px; background: var(--ground); padding: 0 4px; font-size: 10px; color: var(--mute); }
+  .box.hot { border-color: var(--acc); } .box.hot > .ttl { color: var(--acc); } .box.waitb { border-color: var(--wait); } .box.waitb > .ttl { color: var(--wait); }
+  .bar { font: 11px 'Geist Mono'; letter-spacing: -.5px; white-space: pre; color: var(--acc); } .bar u { text-decoration: none; color: #3a3a3a; }
+  .spark { font: 12px/1 'Geist Mono'; letter-spacing: -1px; color: var(--acc); }
+  /* TOUCHABLE = rounded */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 26px; padding: 0 12px; border-radius: 999px; background: var(--c2); border: 1px solid var(--line2); font-size: 12px; color: var(--fg); white-space: nowrap; }
+  .btn.pri { background: var(--acc); color: #0b1d33; border-color: var(--acc); } .btn.warn { color: var(--rose); border-color: #5a3a36; } .btn.ghost { background: transparent; }
+  .btn .nf { font-size: 14px; }
+  .tile { position: absolute; border-radius: 16px; background: var(--c2); border: 1px solid #262626; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: var(--fg); }
+  .tile .nf { font-size: 22px; } .tile.on-acc { background: #a8c7fa26; border-color: var(--acc); color: var(--acc); } .tile.on-latte { background: #f2c9a01f; border-color: var(--latte); color: var(--latte); }
+  .tile.on-wait { background: #ffd27a1a; border-color: var(--wait); color: var(--wait); }
+  .seg { display: inline-flex; border-radius: 999px; border: 1px solid var(--line2); overflow: hidden; } .seg span { padding: 3px 10px; font-size: 11px; color: var(--soft); } .seg span.on { background: var(--c2); color: var(--fg); }
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line2); font-size: 12px; color: var(--soft); }
+  .chip.on { background: var(--c2); border-color: #4a4a4a; color: #fff; } .chip.wait { border-color: var(--wait); color: var(--wait); }
+  .slider { height: 6px; background: #2a2a2a; position: relative; border-radius: 3px; } .slider i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--acc); border-radius: 3px; }
+  .slider b { position: absolute; top: -6px; width: 18px; height: 18px; border-radius: 50%; background: var(--fg); }
+  .toggle { width: 30px; height: 17px; border-radius: 9px; background: var(--acc); position: relative; display: inline-block; } .toggle i { position: absolute; right: 2px; top: 2px; width: 13px; height: 13px; border-radius: 50%; background: #0b1d33; }
+  .toggle.off { background: #2a2a2a; } .toggle.off i { left: 2px; right: auto; background: #6a6a6a; }
+  .abs { position: absolute; }
+</style>
+</head>
+<body>
+<h1>PocketDeck: mixed style</h1>
+<p class="lead">One rule on every page: <span class="rule">read-only → terminal</span> square frames with the title in the border, mono type, ASCII bars and sparklines;
+<span class="rule">touchable → rounded</span> pills, tiles, chips, sliders, toggles. Icons are single-colour Nerd Font glyphs (loaded from the real symbols font), tinted like text.
+Screens are the tablet's 512×300 layout at 1.5×; the left strip is the rail over the damaged area.</p>
+<div id="out"></div>
+<script>
+const I = cp => `<i class="nf">&#x${cp};</i>`;
+const IC = { mic:'F036C', volUp:'F057E', volDn:'F057F', term:'F018D', shot:'F0E51', timer:'F051B', lock:'F033E', monitor:'F0379', coffee:'F0176',
+  claude:'F06C4', play:'F040A', pause:'F03E4', next:'F04AD', prev:'F04AE', power:'F0425', restart:'F0709', android:'F0032', linux:'F033D',
+  flash:'F0241', wifi:'F05A9', batt:'F0084', bright:'F00DF', copy:'F018F', cpu:'F0EE0', mem:'F035B', tablet:'F04F6', usb:'F0553', temp:'F050F',
+  note:'F075A', shuffle:'F049D', repeat:'F0456', heart:'F02D1', chart:'F0128', folder:'F024B', moon:'F0594', check:'F012C', ui:'F08C6' };
+const WAVE = (() => { const r = []; let t = 0; for (let i = 0; i < 30; i++) { t += .1;
+  const lv = Math.min(1, (0.45*Math.abs(Math.sin(t*1.3)) + 0.3*Math.abs(Math.sin(t*3.1+1.2)) + 0.12*Math.abs(Math.sin(t*7.7+.4))) * 1.09);
+  const w = lv * 4; let s = ''; for (let c = 0; c < 8; c++) { const d = Math.abs(c + .5 - 4); s += d < w - 1 ? '|' : d < w - .3 ? ':' : d < w + .4 ? '.' : ' '; }
+  r.push(lv > .78 ? `<b>${s}</b>` : s); } return r.join('\n'); })();
+const rail = () => `<div class="rail"><div class="wave">${WAVE}</div>
+  <div class="dmg" style="left:22px;top:30px;width:14px;height:40px;transform:skewX(-12deg)"></div><div class="dmg" style="left:66px;top:118px;width:12px;height:84px"></div>
+  <div class="dmg" style="left:58px;top:200px;width:9px;height:100px;transform:skewX(8deg)"></div><div class="dmg" style="left:32px;top:262px;width:52px;height:34px;border-radius:40%;opacity:.7"></div>
+  <div class="crack" style="left:44px;top:0;width:76px;transform:rotate(112deg)"></div>
+  <div class="pocket"><div class="h">14</div><div class="m">56</div><div class="d">mon</div><div class="d2">23 nov</div><div class="s">claude</div><div class="s2"><span class="acc">■</span> 1 live</div><div class="s2" style="margin-top:4px">76%↑</div></div></div>`;
+const TABS = ['BOARD','DECK','CLAUDE','USAGE','MUSIC','SETTINGS'];
+const screen = (on, pane) => `<div class="frame"><div class="screen">${rail()}<div class="main"><div class="nav">${TABS.map(t => `<span class="${t===on?'on':''}">${t}</span>`).join('')}</div><div class="pane">${pane}</div></div></div></div>`;
+const bar = (n, of = 20) => `${'█'.repeat(n)}<u>${'░'.repeat(of - n)}</u>`;
+const SP = '▁▂▃▂▄▅▃▂▃▅▆▄▃▅▇▆▄▃▂▃';
+
+// BOARD: all read-only, plus one control (history window)
+const board = `
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:15px 10px;margin-top:5px">
+  <div class="box"><span class="ttl">LINUX CPU</span><span class="ttr">${I(IC.cpu)}</span><div class="x2">12%</div><div class="spark">${SP}</div><div class="xs mute">8 cores · 3.4 GHz</div></div>
+  <div class="box"><span class="ttl">LINUX RAM</span><span class="ttr">${I(IC.mem)}</span><div class="x2">64%</div><div class="spark">▅▅▅▆▅▅▆▆▆▅▅▆▆▆▆▆▆▅▆▆</div><div class="xs mute">10.1 / 15.6 GB</div></div>
+  <div class="box"><span class="ttl">TABLET</span><span class="ttr">${I(IC.batt)}</span><div class="x2">76%<span class="sm ok"> ↑</span></div><div class="bar">${bar(15)}</div><div class="xs mute">31 °C · 4.02 V · +420 mA</div></div>
+  <div class="box"><span class="ttl">TABLET RAM</span><span class="ttr">${I(IC.tablet)}</span><div class="x2">725<span class="sm mute"> MB</span></div><div class="bar">${bar(17)}</div><div class="xs mute">free of 861 MB</div></div>
+</div>
+<div style="display:flex;align-items:center;gap:10px;margin-top:12px">
+  <div class="box" style="flex:1;padding:5px 7px"><span class="ttl">LINK</span><div class="xs" style="display:flex;justify-content:space-between"><span><span class="ok">●</span> usb · ssh</span><span>60 fps</span><span class="mute">up 3h 12m</span></div></div>
+  <span class="seg"><span>1m</span><span class="on">10m</span><span>1h</span></span>
+</div>`;
+
+// DECK: tiles are touchable → rounded; their readouts use mono/ASCII
+const deck = `
+<div class="tile" style="left:0;top:0;width:58px;height:254px;border-radius:29px;justify-content:space-between;padding:16px 0">
+  ${I(IC.volUp)}<div style="display:flex;flex-direction:column;align-items:center;gap:6px"><span class="mono base">59</span><span class="mono acc" style="font-size:9px;line-height:7px;white-space:pre">█\n█\n█\n█\n█\n<span style="color:#3a3a3a">█\n█\n█</span></span></div>${I(IC.volDn)}</div>
+<div class="tile" style="left:68px;top:0;width:104px;height:120px;border-radius:52px"><i class="nf" style="font-size:34px">&#x${IC.mic};</i><span class="mono xs rose">● live</span></div>
+<div class="tile on-wait" style="left:182px;top:0;width:206px;height:56px;border-radius:28px;flex-direction:row;justify-content:flex-start;gap:12px;padding:0 10px">
+  <span style="width:38px;height:38px;border-radius:50%;background:var(--wait);color:#2b1e05;display:flex;align-items:center;justify-content:center">${I(IC.claude)}</span><span class="lg">claude</span><span class="mono xs" style="margin-left:auto;margin-right:8px">focus</span></div>
+<div class="tile" style="left:182px;top:64px;width:98px;height:56px">${I(IC.term)}</div>
+<div class="tile" style="left:290px;top:64px;width:98px;height:56px">${I(IC.shot)}</div>
+<div class="tile on-acc" style="left:68px;top:130px;width:150px;height:56px;border-radius:28px;flex-direction:row;gap:10px">${I(IC.timer)}<div><div class="mono base">24:58</div><div class="mono xs">paused</div></div></div>
+<div class="tile" style="left:228px;top:130px;width:74px;height:56px">${I(IC.lock)}</div>
+<div class="tile" style="left:312px;top:130px;width:76px;height:56px">${I(IC.monitor)}</div>
+<div class="tile on-latte" style="left:68px;top:196px;width:320px;height:58px;border-radius:29px;flex-direction:row;justify-content:flex-start;gap:12px;padding:0 18px">${I(IC.coffee)}<div><div class="base">awake</div><div class="mono xs">caffeine · blocks sleep</div></div><span class="mono xs" style="margin-left:auto">on</span></div>`;
+
+// CLAUDE: chips + copy are touchable; the conversation and status are read-only
+const claude = `
+<div style="display:flex;gap:6px;margin-bottom:12px"><span class="chip on"><span class="acc">■</span> pocketdeck</span><span class="chip">dotfiles</span><span class="chip wait">api <span class="mono xs">asks</span></span></div>
+<div style="display:flex;gap:10px;height:190px">
+  <div class="box" style="flex:1;min-width:0"><span class="ttl">POCKETDECK</span><span class="ttr">reply</span><div class="xs mute" style="margin-bottom:6px">you › rework the board so it's machine agnostic</div>
+    <div class="sm" style="line-height:17px;font-family:Geist">Done. The board reads the host's OS from deckd, so the labels say "linux cpu" here and "mac cpu" on a Mac. The claude and now-playing cells are gone.</div></div>
+  <div class="box hot" style="width:138px"><span class="ttl">NOW · 12s</span><div class="base" style="font-family:Geist;margin-bottom:6px">editing views.tsx</div>
+    <div class="xs mute" style="line-height:14px">Read deckconfig.ts<br>Edit views.tsx<br>Bash bun test</div>
+    <div style="position:absolute;left:7px;right:7px;bottom:7px"><div class="xs mute" style="display:flex;justify-content:space-between"><span>context</span><span>285k/1M</span></div><div class="bar xs">${bar(5, 16)}</div></div></div>
+</div>
+<div style="display:flex;align-items:center;gap:8px;margin-top:9px"><span class="btn pri">${I(IC.copy)} copy reply</span><span class="xs mute mono" style="margin-left:auto">opus-5-5 · ~/pocketdeck</span></div>`;
+
+// USAGE: read-only charts + a range control
+const usage = `
+<div style="display:flex;align-items:flex-start;gap:10px;margin-top:5px">
+  <div class="box" style="flex:1"><span class="ttl">OUTPUT TOKENS · TODAY</span><div class="x3" style="font-family:Geist;color:var(--acc);line-height:36px">143.9k</div>
+    <div class="xs mute">39.3M read · 99% cached · 144 msgs</div></div>
+  <span class="seg" style="margin-top:2px"><span class="on">today</span><span>7d</span></span>
+</div>
+<div class="box" style="margin-top:14px"><span class="ttl">BY HOUR</span><span class="ttr">peak 134.5k · 14h</span>
+  <div class="mono acc" style="font-size:11px;line-height:9px;white-space:pre;letter-spacing:1px">              ▂
+              █ ▃
+          ▁ ▂ █ █
+    ▁ ▂ ▃ █ █ █ █ ▂ </div><div class="xs mute" style="white-space:pre">0     6     12    18   now</div></div>
+<div class="box" style="margin-top:14px"><span class="ttl">PROJECTS</span>
+  <div class="xs" style="display:flex;justify-content:space-between"><span>pocketdeck</span><span class="bar">${bar(18, 22)}</span><span>128.2k</span></div>
+  <div class="xs" style="display:flex;justify-content:space-between"><span class="soft">dotfiles</span><span class="bar">${bar(2, 22)}</span><span class="soft">11.0k</span></div>
+  <div class="xs" style="display:flex;justify-content:space-between"><span class="soft">api</span><span class="bar">${bar(1, 22)}</span><span class="soft">4.7k</span></div></div>`;
+
+// MUSIC: cover + track info read-only, transport touchable
+const music = `
+<div style="display:flex;gap:12px;height:254px">
+  <div style="width:150px;display:flex;flex-direction:column;gap:10px">
+    <div style="width:150px;height:150px;border-radius:12px;background:linear-gradient(135deg,#2b3a55,#0f1622 60%,#3a2b45);display:flex;align-items:flex-end;padding:8px"><span class="mono xs soft">cover art</span></div>
+    <div class="box" style="padding:6px 7px"><span class="ttl">SOURCE</span><div class="xs">${I(IC.linux)} spotify · linux</div></div>
+  </div>
+  <div style="flex:1;display:flex;flex-direction:column;gap:12px;min-width:0">
+    <div class="box hot" style="flex:1"><span class="ttl">NOW PLAYING</span><span class="ttr">${I(IC.note)}</span>
+      <div class="lg" style="font-family:Geist;margin-top:4px">windowlicker</div><div class="sm soft">aphex twin · windowlicker ep</div>
+      <div class="bar" style="margin-top:14px">${bar(9, 26)}</div><div class="xs mute" style="display:flex;justify-content:space-between"><span>2:41</span><span>6:07</span></div>
+      <div class="mono xs mute" style="margin-top:10px;white-space:pre;color:#6a6a6a">.:|:. .::|||::. .:|:.  .:|::.</div></div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span class="btn ghost" style="width:38px;padding:0">${I(IC.shuffle)}</span>
+      <span class="btn" style="flex:1;height:38px"><i class="nf" style="font-size:18px">&#x${IC.prev};</i></span>
+      <span class="btn pri" style="flex:1.3;height:38px"><i class="nf" style="font-size:20px">&#x${IC.pause};</i></span>
+      <span class="btn" style="flex:1;height:38px"><i class="nf" style="font-size:18px">&#x${IC.next};</i></span>
+      <span class="btn ghost" style="width:38px;padding:0">${I(IC.heart)}</span>
+    </div>
+  </div>
+</div>`;
+
+// SETTINGS: controls rounded, status read-only
+const settings = (sheet = '') => `
+<div style="display:grid;grid-template-columns:1.15fr 1fr;gap:10px">
+  <div style="display:flex;flex-direction:column;gap:7px">
+    <div class="mono xs mute" style="letter-spacing:.05em">POWER</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+      <span class="btn">${I(IC.restart)} linux</span><span class="btn">${I(IC.android)} android</span>
+      <span class="btn">${I(IC.flash)} fastboot</span><span class="btn">${I(IC.ui)} restart ui</span></div>
+    <span class="btn warn">${I(IC.power)} power off</span>
+    <div class="mono xs mute" style="letter-spacing:.05em;margin-top:4px;display:flex;justify-content:space-between"><span>BRIGHTNESS</span><span class="acc">78%</span></div>
+    <div style="display:flex;align-items:center;gap:10px;padding:4px 2px">${I(IC.bright)}<div class="slider" style="flex:1"><i style="width:78%"></i><b style="left:72%"></b></div></div>
+    <div class="sm" style="display:flex;justify-content:space-between;align-items:center"><span class="soft">${I(IC.moon)} night dim</span><span class="toggle"><i></i></span></div>
+    <div class="sm" style="display:flex;justify-content:space-between;align-items:center"><span class="soft">${I(IC.batt)} charge to 80%</span><span class="toggle"><i></i></span></div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:14px;margin-top:6px">
+    <div class="box"><span class="ttl">NETWORK</span><span class="ttr">${I(IC.wifi)}</span><div class="xs"><span class="ok">●</span> home-2g · -61 dBm</div><div class="xs mute">10.0.0.15 · usb 172.16.42.1</div></div>
+    <div class="box"><span class="ttl">BATTERY</span><div class="bar xs">${bar(15, 16)}</div><div class="xs mute">76% · 31 °C · +420 mA</div></div>
+    <div class="box"><span class="ttl">SYSTEM</span><div class="xs" style="line-height:15px"><span class="mute">slot  </span>b <span class="mute">(a fallback)</span><br><span class="mute">build </span>ae95761<br><span class="mute">kern  </span>7.0.10 · up 3h 12m<br><span class="mute">soc   </span>44 °C · 1092 MHz</div></div>
+  </div>
+</div>${sheet}`;
+const sheet = `<div class="abs" style="left:8px;right:8px;bottom:8px;border-radius:22px;background:#141414;border:1px solid var(--rose);padding:12px 14px;display:flex;align-items:center;gap:12px">
+  <i class="nf rose" style="font-size:24px">&#x${IC.android};</i><div style="flex:1"><div class="base">reboot to android?</div><div class="mono xs mute">touch filters paused while this is open</div></div>
+  <span class="btn" style="height:34px">cancel</span><span class="btn" style="height:34px;background:var(--rose);color:#2b0f0b;border-color:var(--rose)">reboot</span></div>`;
+
+const pages = [
+  ['BOARD', board, 'All read-only, so all terminal frames; the one control (history window for the sparklines) is a rounded segmented switch. Icons in the frame corners.'],
+  ['DECK', deck, 'Every tile is a button, so rounded; tiles stay dark and only "on" tiles take a single colour (outline + faint tint). Readouts inside (volume meter, timer) are mono/ASCII.'],
+  ['CLAUDE', claude, 'Session chips and "copy reply" are rounded; the reply and the NOW status are terminal frames.'],
+  ['USAGE', usage, 'PULSE redone: token count, hourly bars and per-project split as terminal frames; today/7d is a rounded switch.'],
+  ['MUSIC', music, 'Real cover art (from the host player), track info in a terminal frame with an ASCII progress bar; transport is rounded with icon-only buttons.'],
+  ['SETTINGS', settings(), 'Left: everything you tap (power, brightness, toggles), rounded. Right: status read-outs in terminal frames.'],
+  ['SETTINGS', settings(sheet), 'Confirm sheet for a destructive action; the ghost-touch filters are paused while it is open.'],
+];
+let html = '';
+for (let i = 0; i < pages.length; i += 2) {
+  html += '<div class="row">' + pages.slice(i, i + 2).map(([on, p, note]) => `<div class="col"><h2>${on.toLowerCase()}</h2>${screen(on, p)}<div class="note">${note}</div></div>`).join('') + '</div>';
+}
+document.getElementById('out').innerHTML = html;
+</script>
+</body>
+</html>

@@ -7,7 +7,7 @@
 // out — the core resolves cmap misses to gid 0 (tofu) at runtime.
 //
 // Rasterization: opentype.js outlines, flattened to polylines, scanline
-// even-odd fill with horizontally-biased supersampling into 8-bit coverage
+// non-zero winding fill with horizontally-biased supersampling into 8-bit coverage
 // cells. Atlas v3 keeps cell/line/cmap metrics in LOGICAL px while baking the
 // bitmap at `rasterDensity` samples per logical px. A Vita density-2 build can
 // therefore draw sharp 2x coverage without changing PSP-compatible layout.
@@ -81,8 +81,15 @@ function flatten(path: Path, curveSteps = CURVE_STEPS): Contour[] {
   let sy = 0;
   let cx = 0;
   let cy = 0;
+  // Contours are implicitly closed (as in every font rasterizer): opentype.js emits no "Z" for
+  // CFF outlines, and an unclosed contour misses its last edge, so the scanline fill broke.
   const close = () => {
-    if (cur.length > 1) contours.push(cur);
+    if (cur.length > 1) {
+      const first = cur[0];
+      const last = cur[cur.length - 1];
+      if (first.x !== last.x || first.y !== last.y) cur.push({ x: first.x, y: first.y });
+      contours.push(cur);
+    }
     cur = [];
   };
   for (const cmd of path.commands) {
@@ -148,32 +155,46 @@ function rasterize(contours: Contour[], cellW: number, cellH: number): Uint8Arra
   const sw = cellW * SS_X;
   const samplesPerPixel = SS_X * SS_Y;
   const counts = new Uint16Array(cellW); // covered subsamples per pixel column, one row at a time
+  // Non-zero winding (what fonts are designed for): CFF outlines, e.g. Nerd Font patched faces,
+  // overlap their contours, and an even-odd fill punched holes where they did. For fonts whose
+  // contours don't overlap (Inter, Geist) the result is identical.
   const xs: number[] = [];
+  const ds: number[] = [];
+  const order: number[] = [];
   for (let row = 0; row < cellH; row++) {
     counts.fill(0);
     for (let sub = 0; sub < SS_Y; sub++) {
       const y = row + (sub + 0.5) / SS_Y;
       xs.length = 0;
+      ds.length = 0;
       for (const c of contours) {
         for (let i = 0; i < c.length - 1; i++) {
           const p0 = c[i];
           const p1 = c[i + 1];
           if ((p0.y <= y && p1.y > y) || (p1.y <= y && p0.y > y)) {
             xs.push(p0.x + ((y - p0.y) * (p1.x - p0.x)) / (p1.y - p0.y));
+            ds.push(p1.y > p0.y ? 1 : -1);
           }
         }
       }
       if (xs.length < 2) continue;
-      xs.sort((a, b) => a - b);
-      for (let k = 0; k + 1 < xs.length; k += 2) {
-        // subcolumn centers inside [xs[k], xs[k+1])
-        let s0 = Math.ceil(xs[k] * SS_X - 0.5);
-        let s1 = Math.floor(xs[k + 1] * SS_X - 0.5);
+      order.length = 0;
+      for (let k = 0; k < xs.length; k++) order.push(k);
+      order.sort((a, b) => xs[a] - xs[b]);
+      let wind = 0;
+      for (let k = 0; k + 1 < order.length; k++) {
+        wind += ds[order[k]];
+        if (wind === 0) continue;
+        const x0 = xs[order[k]];
+        const x1 = xs[order[k + 1]];
+        // subcolumn centers inside [x0, x1)
+        let s0 = Math.ceil(x0 * SS_X - 0.5);
+        let s1 = Math.floor(x1 * SS_X - 0.5);
         if (s0 < 0) s0 = 0;
         if (s1 >= sw) s1 = sw - 1;
         for (let s = s0; s <= s1; s++) {
           const center = (s + 0.5) / SS_X;
-          if (center >= xs[k] && center < xs[k + 1]) counts[(s / SS_X) | 0]++;
+          if (center >= x0 && center < x1) counts[(s / SS_X) | 0]++;
         }
       }
     }
