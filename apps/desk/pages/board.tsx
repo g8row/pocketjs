@@ -5,9 +5,11 @@
 // Data (desk.*): host.os; sys.cpu/mem (%), sys.cores/ghz/memUsedGb/memTotalGb, sys.hist.{cpu,mem}.{1m,10m,1h}
 // (30 samples each, %); tablet.battery/charging/memFreeMb/memTotalMb/uptime/tempC/volts/currentMa.
 // Every NEW field is optional: without sys.hist the page keeps its own 1m/10m/1h rings from sys.cpu/mem.
+// link.via ("ssh" | "adb" | null): the route deckd sees the tablet on (LINK row). While the link is down every
+// value here is stale: headlines go grey and LINK counts the time since it dropped.
 // Action: sys.window {w} when the switch changes (deckd may use it to pick its sample cadence).
 
-import { createSignal, type Accessor, type JSX } from "solid-js";
+import { Show, createSignal, type Accessor, type JSX } from "solid-js";
 import { Text, View } from "@pocketjs/framework/components";
 import { onFrame } from "@pocketjs/framework/lifecycle";
 import { C, PH, PW, Seg, TBar, TBox, TSpark } from "../ui.tsx";
@@ -118,6 +120,30 @@ function createFps(active: () => boolean) {
   return fps;
 }
 
+/** Seconds since the link to deckd dropped (0 while up), ticking once a second while the page is on screen. */
+function createOffline(active: () => boolean) {
+  const [secs, setSecs] = createSignal(0);
+  let since = 0;
+  onFrame(() => {
+    if (linkConnected()) {
+      since = 0;
+      if (secs()) setSecs(0);
+      return;
+    }
+    const now = Date.now();
+    if (!since) since = now;
+    if (!active()) return;
+    const s = Math.max(1, Math.floor((now - since) / 1000));
+    if (s !== secs()) setSecs(s);
+  });
+  return secs;
+}
+
+/** 42 → "42s", 300 → "5m", 7300 → "2h". */
+const ago = (s: number) => (s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h`);
+
+const ROUTE: Record<string, string> = { ssh: "usb · ssh", adb: "usb · adb" };
+
 // ---- local pieces ---------------------------------------------------------------------
 
 /** Headline: big Geist number with a small mono unit (and an optional marker). Fixed height so a
@@ -160,6 +186,8 @@ export function BoardPage(props: { active: () => boolean }) {
   const [win, setWin] = createSignal<Win>("10m");
   const local = createLocalHist();
   const fps = createFps(props.active);
+  const offline = createOffline(props.active);
+  const route = () => ROUTE[desk.link?.via as string] ?? "linked";
 
   const sys = () => desk.sys ?? {};
   const tab = () => desk.tablet ?? {};
@@ -219,7 +247,8 @@ export function BoardPage(props: { active: () => boolean }) {
     act("sys.window", { w });
   };
 
-  const accentOr = (hot: boolean, col: string) => (hot ? col : undefined);
+  // offline: every value is the last one deckd sent, so headlines go grey whatever their state
+  const accentOr = (hot: boolean, col: string) => (!linkConnected() ? C.mute : hot ? col : undefined);
 
   return (
     <View class="flex-col" style={{ width: PW, height: PH, paddingL: PAD_X, paddingR: PAD_X, paddingT: PAD_T, paddingB: PAD_B, gap: GAP }}>
@@ -250,18 +279,16 @@ export function BoardPage(props: { active: () => boolean }) {
       <View class="flex-row items-end" style={{ gap: GAP }}>
         <TBox title="LINK" h={LINK_H} grow pad={7}>
           <View class="flex-row items-center justify-between">
-            <View class="flex-row" style={{ width: 96, gap: 6 }}>
+            <View class="flex-row" style={{ gap: 6 }}>
               <Text class="text-xs font-bold" style={{ textColor: linkConnected() ? C.ok : C.rose }}>●</Text>
               <Text class="text-xs font-bold" style={{ textColor: linkConnected() ? C.fg : C.rose }}>
-                {linkConnected() ? "usb · ssh" : "offline"}
+                {linkConnected() ? route() : `offline ${ago(offline())}`}
               </Text>
             </View>
-            <View class="flex-1 items-center">
+            <Show when={linkConnected()}>
               <Text class="text-xs font-bold" style={{ textColor: C.soft }}>{fps() ? `${fps()} fps` : `${DASH} fps`}</Text>
-            </View>
-            <View class="items-end" style={{ width: 96 }}>
-              <Text class="text-xs font-bold" style={{ textColor: C.mute }}>{tab().uptime ? `up ${tab().uptime}` : `up ${DASH}`}</Text>
-            </View>
+            </Show>
+            <Text class="text-xs font-bold" style={{ textColor: C.mute }}>{tab().uptime ? `up ${tab().uptime}` : `up ${DASH}`}</Text>
           </View>
         </TBox>
         <View style={{ paddingB: 1 }}>

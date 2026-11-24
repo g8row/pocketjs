@@ -5,6 +5,8 @@
 //   circle       shape "circle" (the mic): big icon + state
 //   pill         a tile with something to say (`sub`, a live value) or ≥ 2 cells wide: icon + text
 //   icon tile    everything else: just the icon
+//   term tile    look "term", any size: a terminal frame (square, title in the notch, [on]/[off] tag) with
+//                mono text; the deck mixes a few of these with the rounded tiles (DESIGN.md's two styles)
 //
 // Style (DESIGN.md §2): every tile is touchable, so rounded, dark (C.raised, 1 px #262626 outline) with a
 // single-colour Nerd Font icon. Colour means state only: an `on` / `fill` tile (or a running live value)
@@ -191,20 +193,29 @@ function Segment(props: { t: Tile; box: Box; vertical: boolean; first: boolean; 
 const METER = 8; // cells in the rail's level meter
 const CELL = "▃▃"; // one meter cell: lower blocks, so stacked lines leave a gap
 
-/** The read-only level between a rail's halves: the number and a vertical block meter. Square frame
- *  (terminal style), since it isn't a button. */
-function Level(props: { level: () => number; box: Box }) {
-  const n = () => Math.max(0, Math.min(METER, Math.round((props.level() / 100) * METER)));
+/** The level between a rail's halves: the number and a vertical block meter. Square frame (terminal style);
+ *  tapping it toggles the output mute (`vol.mute`), shown as a mute icon over a dimmed meter. */
+function Level(props: { level: () => number; muted: () => boolean; box: Box }) {
+  let n: NodeMirror | undefined;
+  const lit = () => (props.muted() ? 0 : Math.max(0, Math.min(METER, Math.round((props.level() / 100) * METER))));
   return (
     <View
+      ref={(x: NodeMirror) => (n = x)}
       class="absolute flex-col items-center justify-center border gap-[3]"
-      style={{ insetL: props.box.x, insetT: props.box.y, width: props.box.w, height: props.box.h, borderColor: C.frame }}
+      style={{ insetL: props.box.x, insetT: props.box.y, width: props.box.w, height: props.box.h, borderColor: props.muted() ? C.rose : C.frame }}
+      focusable
+      onPress={() => {
+        squish(n, 0.93);
+        act("vol.mute");
+      }}
     >
-      <Text class="text-base font-bold" style={{ textColor: C.fg }}>{`${Math.round(props.level())}`}</Text>
+      <Show when={props.muted()} fallback={<Text class="text-base font-bold" style={{ textColor: C.fg }}>{`${Math.round(props.level())}`}</Text>}>
+        <Icon name="vol-mute" size="xl" color={C.rose} />
+      </Show>
       <View class="flex-col items-center">
         <For each={Array.from({ length: METER }, (_, i) => METER - 1 - i)}>
           {(i) => (
-            <Text class="text-xs font-bold leading-[7]" style={{ textColor: i < n() ? accent() : C.dim }}>
+            <Text class="text-xs font-bold leading-[7]" style={{ textColor: i < lit() ? accent() : C.dim }}>
               {CELL}
             </Text>
           )}
@@ -243,7 +254,7 @@ function SplitPill(props: { tiles: Tile[]; b: Box }) {
     <>
       <For each={segs()}>{(s) => <Segment t={s.t} box={s.box} vertical={vertical} first={s.first} last={s.last} />}</For>
       <Show when={withLevel}>
-        <Level level={() => level() ?? 0} box={lvBox()} />
+        <Level level={() => level() ?? 0} muted={() => !!props.tiles.find((t) => typeof t.level === "number")?.muted} box={lvBox()} />
       </Show>
     </>
   );
@@ -390,6 +401,32 @@ function IconTile(props: { t: Tile; b: Box }) {
   );
 }
 
+/** Terminal-style tile: square frame with the label in its notch and the state tag on the right; body is the
+ *  icon plus a mono state word (toggles) or a prompt (plain actions). Colour = state, as on the rounded tiles. */
+function TermTile(props: { t: Tile; b: Box; wide: boolean }) {
+  const on = () => isOn(props.t);
+  const toggle = () => typeof props.t.on === "boolean" || !!props.t.sub;
+  const ink = () => (on() ? hex(props.t) : C.fg);
+  const word = () => clip(lower(props.t.sub) || " ", Math.max(3, Math.floor((props.b.w - 60) / (props.wide ? 12 : 9.6))));
+  return (
+    <Press id={props.t.id} style={{ insetL: props.b.x, insetT: props.b.y, width: props.b.w, height: props.b.h }}>
+      <TBox title={clip(lower(props.t.label) || " ", Math.max(3, Math.floor((props.b.w - (toggle() ? 56 : 20)) / 7.3)))} right={toggle() ? (on() ? "[on]" : "[off]") : undefined} hot={on()} color={hex(props.t)} w={props.b.w} h={props.b.h} pad={9}>
+        <View class="flex-1 flex-row items-center gap-[10]">
+          <Icon name={props.t.icon ? iconOf(props.t) : "dot"} size={props.wide ? "4xl" : "2xl"} color={ink()} />
+          <Show
+            when={toggle()}
+            fallback={<Text class="text-base font-bold" style={{ textColor: C.soft }}>~$ _</Text>}
+          >
+            <Show when={props.wide} fallback={<Text class="text-base font-bold" style={{ textColor: ink() }}>{word()}</Text>}>
+              <Text class="text-xl font-bold" style={{ textColor: ink() }}>{word()}</Text>
+            </Show>
+          </Show>
+        </View>
+      </TBox>
+    </Press>
+  );
+}
+
 // ---- page ------------------------------------------------------------------------------------
 
 export function DeckPage(props: { active: Active }) {
@@ -397,7 +434,7 @@ export function DeckPage(props: { active: Active }) {
   // Re-pack only when ids/spans/groups/kinds change: live fields (on, sub text, level) are read from the
   // store proxies inside each tile, so a state push repaints a label instead of rebuilding the page.
   const sig = (xs: Item[]) =>
-    xs.map((it) => `${it.tiles.map((t) => `${t.id}:${t.shape ?? ""}:${t.sub ? 1 : 0}:${t.live ?? ""}:${t.icon ? 1 : 0}`).join("+")}@${it.col},${it.row},${it.w},${it.h}`).join("|");
+    xs.map((it) => `${it.tiles.map((t) => `${t.id}:${t.shape ?? ""}:${t.look ?? ""}:${t.sub ? 1 : 0}:${t.live ?? ""}:${t.icon ? 1 : 0}`).join("+")}@${it.col},${it.row},${it.w},${it.h}`).join("|");
   const items = createMemo(() => pack((desk.deck?.tiles ?? []).slice(0, 12)), [], { equals: (a, b) => sig(a) === sig(b) });
   const boxes = createMemo(() => layout(items(), PW, PH));
   return (
@@ -421,6 +458,7 @@ export function DeckPage(props: { active: Active }) {
             const b = () => boxes()[i()]!;
             const t = it.tiles[0];
             if (it.tiles.length > 1) return <SplitPill tiles={it.tiles} b={b()} />;
+            if (t.look === "term") return <TermTile t={t} b={b()} wide={it.w >= 2} />;
             if (t.shape === "circle") return <Circle t={t} b={b()} />;
             if (it.w >= 2 || t.sub || t.live) return <PillTile t={t} b={b()} wide={it.w >= 2} />;
             return <IconTile t={t} b={b()} />;

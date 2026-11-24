@@ -57,6 +57,8 @@ export const NF = {
   "home": "󰋜", // U+F02DC
   "cog": "󰒓", // U+F0493
   "bell": "󰂚", // U+F009A
+  "bell-off": "󰂛", // U+F009B
+  "crop": "󰆞", // U+F019E
   "clock": "󰅐", // U+F0150
   "keyboard": "󰌌", // U+F030C
   "message": "󰍡", // U+F0361
