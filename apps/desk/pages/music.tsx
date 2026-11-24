@@ -336,7 +336,7 @@ function BlockBar(props: {
 }
 
 /** A bare icon button: no fill or outline, a rounded raised fill only while pressed. */
-function IconBtn(props: { icon: string; color?: string; size?: "base" | "lg" | "xl" | "2xl"; w?: number; h?: number; onPress: () => void }) {
+function IconBtn(props: { icon: string; color?: string; size?: "sm" | "base" | "lg" | "xl" | "2xl"; w?: number; h?: number; onPress: () => void }) {
   return (
     <View
       class="items-center justify-center rounded-[999] active:bg-[#1d1d1d]"
@@ -349,21 +349,23 @@ function IconBtn(props: { icon: string; color?: string; size?: "base" | "lg" | "
   );
 }
 
-/** The one filled control: round play/pause. */
-function PlayBtn(props: { playing: () => boolean; d: number }) {
+const DIM = "#4a4a4a"; // controls while nothing is playing
+
+/** The one filled control: round play/pause (raised grey while nothing is playing; still works). */
+function PlayBtn(props: { playing: () => boolean; idle: () => boolean; d: number }) {
   let n: NodeMirror | undefined;
   return (
     <View
       ref={(x: NodeMirror) => (n = x)}
       class="items-center justify-center rounded-[999]"
-      style={{ width: props.d, height: props.d, bgColor: accent() }}
+      style={{ width: props.d, height: props.d, bgColor: props.idle() ? C.raised : accent() }}
       focusable
       onPress={() => {
         squish(n);
         act("music.toggle");
       }}
     >
-      <Icon name={props.playing() ? "pause" : "play"} size="xl" color={ON_ACCENT} />
+      <Icon name={props.playing() ? "pause" : "play"} size="xl" color={props.idle() ? C.soft : ON_ACCENT} />
     </View>
   );
 }
@@ -415,6 +417,11 @@ function useMusic(active: Active) {
   const [vol, setVol] = optimistic(() => Math.max(0, Math.min(100, Math.round(Number(m().volume ?? 0)))));
   const [volDrag, setVolDrag] = createSignal<number | null>(null);
   const volShown = () => volDrag() ?? vol();
+  // the last non-zero volume, for unmute
+  let lastVol = 0;
+  createEffect(() => {
+    if (vol() > 0) lastVol = vol();
+  });
 
   return {
     m,
@@ -441,6 +448,11 @@ function useMusic(active: Active) {
     },
     vol,
     volShown,
+    toggleMute: () => {
+      const n = vol() > 0 ? 0 : lastVol || 50;
+      setVol(n);
+      act("music.volume", { v: n });
+    },
     volInput: (v: number) => setVolDrag(Math.round(v * 100)),
     setVolume: (v: number) => {
       const n = Math.round(v * 100);
@@ -507,11 +519,11 @@ function ShuffleRepeat(props: { s: MusicState }) {
   const s = props.s;
   return (
     <>
-      <IconBtn icon={s.shuffle() ? "shuffle" : "shuffle-off"} size="base" color={s.shuffle() ? accent() : C.mute} w={32} h={28} onPress={s.toggleShuffle} />
+      <IconBtn icon={s.shuffle() ? "shuffle" : "shuffle-off"} size="base" color={s.idle() ? DIM : s.shuffle() ? accent() : C.mute} w={32} h={28} onPress={s.toggleShuffle} />
       <IconBtn
         icon={s.repeat() === "one" ? "repeat-once" : s.repeat() === "all" ? "repeat" : "repeat-off"}
         size="base"
-        color={s.repeat() === "off" ? C.mute : accent()}
+        color={s.idle() ? DIM : s.repeat() === "off" ? C.mute : accent()}
         w={32}
         h={28}
         onPress={s.cycleRepeat}
@@ -523,24 +535,29 @@ function ShuffleRepeat(props: { s: MusicState }) {
 function Transport(props: { s: MusicState; d?: number }) {
   return (
     <>
-      <IconBtn icon="prev" size="xl" color={C.fg} w={44} h={40} onPress={() => act("music.prev")} />
-      <PlayBtn playing={props.s.playing} d={props.d ?? 46} />
-      <IconBtn icon="next" size="xl" color={C.fg} w={44} h={40} onPress={() => act("music.next")} />
+      <IconBtn icon="prev" size="xl" color={props.s.idle() ? DIM : C.fg} w={44} h={40} onPress={() => act("music.prev")} />
+      <PlayBtn playing={props.s.playing} idle={props.s.idle} d={props.d ?? 46} />
+      <IconBtn icon="next" size="xl" color={props.s.idle() ? DIM : C.fg} w={44} h={40} onPress={() => act("music.next")} />
     </>
   );
 }
 
-/** Volume icon + the kit's block-bar Slider; (x, y) = the slider's page position. */
+/** Volume: a tappable icon (mute / unmute) + the kit's block-bar Slider; (x, y) = the slider's
+ *  page position. */
 function Volume(props: { s: MusicState; x: number; y: number; cells: number; active: Active }) {
   const s = props.s;
   return (
-    <View class="absolute flex-row items-center gap-[4]" style={{ insetL: props.x - 20, insetT: props.y, height: 24 }}>
-      <View class="items-center" style={{ width: 16 }}>
-        <Icon name={s.volShown() === 0 ? "vol-mute" : s.volShown() < 50 ? "vol-down" : "vol-up"} size="sm" color={C.mute} />
-      </View>
-      <View class="overflow-hidden" style={{ width: props.cells * CELL.xs, height: 24 }}>
-        <Slider x={PANE_X + props.x} y={PANE_Y + props.y} w={props.cells * CELL.xs} value={() => s.vol() / 100} onInput={s.volInput} onChange={s.setVolume} active={props.active} />
-      </View>
+    <View class="absolute flex-row items-center" style={{ insetL: props.x - 30, insetT: props.y, height: 28 }}>
+      <IconBtn
+        icon={s.volShown() === 0 ? "vol-mute" : s.volShown() < 50 ? "vol-down" : "vol-up"}
+        size="sm"
+        color={s.idle() ? DIM : s.volShown() === 0 ? C.rose : C.mute}
+        w={28}
+        h={28}
+        onPress={s.toggleMute}
+      />
+      <View style={{ width: 2 }} />
+      <Slider x={PANE_X + props.x} y={PANE_Y + props.y} w={props.cells * CELL.xs} value={() => s.vol() / 100} onInput={s.volInput} onChange={s.setVolume} active={props.active} />
     </View>
   );
 }
@@ -556,40 +573,39 @@ function ControlRow(props: { s: MusicState; active: Active }) {
       <View class="absolute flex-row items-center justify-center gap-[10]" style={{ insetL: PW / 2 - 80, insetT: Y, width: 160, height: 46 }}>
         <Transport s={props.s} />
       </View>
-      <Volume s={props.s} x={PW - P - 12 * CELL.xs} y={Y + 11} cells={12} active={props.active} />
+      <Volume s={props.s} x={PW - P - 12 * CELL.xs} y={Y + 9} cells={12} active={props.active} />
     </>
   );
 }
 
-// One terminal frame holds cover, track and the seek bar; one quiet control row under it.
-// (Variants A and B, a big cover with the frame beside it and a full-width seek bar, are in the
-// "wip(desk): music layouts A/B/C" commit.)
+// Cover + the NOW PLAYING frame on top, a full-width seek bar with the times at its ends, one
+// quiet control row at the bottom. (Layout B of three; A and C are in the "wip(desk): music
+// layouts A/B/C" commit.)
 function Layout(props: { s: MusicState; active: Active }) {
   const s = props.s;
-  const BOX_H = 206; // frame 14..214
-  const COV = 182; // content top 23
-  const TX = P + 8 + COV + 12; // 210
-  const TW = PW - P - 8 - TX; // 180
-  const CELLS = Math.floor(TW / CELL.xs); // 25
-  const BAR_Y = 159;
+  const COV = 168;
+  const RX = P + COV + 10; // 186
+  const RW = PW - P - RX; // 212
+  const BAR_Y = P + COV + 4; // 180: 28 px touch band
+  const CELLS = 43; // 301 px of xs cells, times either side
+  const BX = Math.round((PW - CELLS * CELL.xs) / 2); // 53
   return (
     <>
-      <View class="absolute" style={{ insetL: P, insetT: P, width: PW - 2 * P, height: BOX_H }}>
-        <TBox title={boxTitle(s)} rightIcon="music" hot={s.playing()} w={PW - 2 * P} h={BOX_H}>
-          <View class="flex-row gap-[12]">
-            <View style={{ marginT: 1 }}>
-              <Cover s={s} size={COV} active={props.active} />
-            </View>
-            <TrackText s={s} w={TW} titleLines={3} />
-          </View>
+      <View class="absolute" style={{ insetL: P, insetT: P }}>
+        <Cover s={s} size={COV} active={props.active} />
+      </View>
+      <View class="absolute" style={{ insetL: RX, insetT: P, width: RW, height: COV }}>
+        <TBox title={boxTitle(s)} rightIcon="music" hot={s.playing()} w={RW} h={COV}>
+          <TrackText s={s} w={RW - 16} titleLines={2} />
         </TBox>
       </View>
-      <View class="absolute" style={{ insetL: TX, insetT: BAR_Y }}>
-        <BlockBar x={PANE_X + TX} y={PANE_Y + BAR_Y} cells={CELLS} size="xs" value={s.progress} color={s.playing() ? accent() : C.soft} onInput={s.seekInput} onChange={s.seek} active={props.active} />
+      <View class="absolute flex-row items-center" style={{ insetL: P, insetT: BAR_Y, width: PW - 2 * P, height: 28 }}>
+        <Elapsed s={s} w={BX - P - 4} />
+        <View style={{ width: CELLS * CELL.xs + 8 }} />
+        <Total s={s} w={BX - P - 4} />
       </View>
-      <View class="absolute flex-row justify-between" style={{ insetL: TX, insetT: BAR_Y + 28, width: CELLS * CELL.xs }}>
-        <Elapsed s={s} />
-        <Total s={s} />
+      <View class="absolute" style={{ insetL: BX, insetT: BAR_Y }}>
+        <BlockBar x={PANE_X + BX} y={PANE_Y + BAR_Y} cells={CELLS} size="xs" value={s.progress} color={s.playing() ? accent() : C.soft} onInput={s.seekInput} onChange={s.seek} active={props.active} />
       </View>
       <ControlRow s={s} active={props.active} />
     </>
